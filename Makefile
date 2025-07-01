@@ -3,6 +3,9 @@
 run:
 	cargo run --all-features
 
+run-info: 
+	RUST_LOG=info cargo run --all-features
+
 fmt:
 	cargo fmt --all -- --check
 
