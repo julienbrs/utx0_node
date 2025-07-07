@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::protocol::peerlist::PeerAddr;
+
+// TODO: forbid unwanted extra fields when deserialize w/ deny_unknown_fields. But doesnt work for enum
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(tag = "type")]
 pub enum Message {
@@ -85,5 +87,73 @@ mod tests {
             serde_json::from_str(&error_json).expect("failed to deserialize JSON to message");
 
         assert_eq!(error_msg, decoded_getpeers);
+    }
+
+    #[test]
+    fn test_tag_type() {
+        let messages = vec![
+            (Message::mk_hello(18018, "test".into()), "Hello"),
+            (Message::mk_peers(vec![]), "Peers"),
+            (Message::mk_getpeers(), "GetPeers"),
+            (Message::mk_error("Error_name".into(), "error content".into()), "Error"),
+        ];
+
+        for (message, expected_tag) in messages {
+            let json = serde_json::to_string(&message).unwrap();
+            assert!(
+                json.contains(&format!(r#"type":"{expected_tag}"#)),
+                "Missing {expected_tag} pattern in {json}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_invalid_json_fails() {
+        let dummy = r#"{"type":"Hello","port":not_a_number}"#;
+        let res: Result<Message, _> = serde_json::from_str(dummy);
+        assert!(res.is_err(), "dummy JSON must not deserialize");
+    }
+
+    #[test]
+
+    fn test_missing_field_rejected() {
+        let missing_port = r#"{"type":"Hello","user_agent":"utx0"}"#;
+        let res: Result<Message, _> = serde_json::from_str(missing_port);
+        assert!(res.is_err(), "Hello without `port` must be an error");
+    }
+
+    #[test]
+    fn test_mk_hello() {
+        let port = 12345;
+        let agent = "utx0-agent".to_string();
+        let msg = Message::mk_hello(port, agent.clone());
+
+        assert_eq!(msg, Message::Hello { port, user_agent: agent });
+    }
+
+    #[test]
+    fn test_mk_peers() {
+        let peers = vec![
+            PeerAddr { host: "localhost".to_string(), port: 18018 },
+            PeerAddr { host: "8.8.8.8".to_string(), port: 18018 },
+        ];
+        let msg = Message::mk_peers(peers.clone());
+
+        assert_eq!(msg, Message::Peers { peers });
+    }
+
+    #[test]
+    fn test_mk_getpeers() {
+        let msg = Message::mk_getpeers();
+        assert_eq!(msg, Message::GetPeers);
+    }
+
+    #[test]
+    fn test_mk_error() {
+        let name = "INVALID_HANDSHAKE".to_string();
+        let msg_str = "peer did not send hello".to_string();
+        let msg = Message::mk_error(name.clone(), msg_str.clone());
+
+        assert_eq!(msg, Message::Error { name, msg: msg_str });
     }
 }

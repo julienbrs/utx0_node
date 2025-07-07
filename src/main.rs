@@ -2,6 +2,7 @@
 #![deny(clippy::all)]
 #![deny(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
+#![allow(clippy::similar_names)]
 #![allow(dead_code)] //TODO: temporary
 
 mod config;
