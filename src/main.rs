@@ -2,8 +2,11 @@
 #![deny(clippy::all)]
 #![deny(clippy::pedantic)]
 #![allow(clippy::module_name_repetitions)]
+#![allow(dead_code)] //TODO: temporary
 
 mod config;
+mod error;
+mod protocol;
 mod util;
 
 use config::Config;
