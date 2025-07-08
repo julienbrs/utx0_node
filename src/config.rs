@@ -1,10 +1,11 @@
 #[derive(Debug)]
 pub struct Config {
     pub port: u16,
+    pub user_agent: String,
 }
 
 impl Default for Config {
     fn default() -> Self {
-        Self { port: 18018 }
+        Self { port: 18018, user_agent: "utx0-v0.0".to_string() }
     }
 }

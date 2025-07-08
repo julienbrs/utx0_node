@@ -12,6 +12,8 @@ mod protocol;
 mod state;
 mod util;
 
+use std::sync::Arc;
+
 use config::Config;
 use tracing::info;
 use util::logging::init_logging;
@@ -22,7 +24,7 @@ use crate::state::peers;
 #[tokio::main]
 async fn main() {
     init_logging();
-    let config = Config::default();
+    let config = Arc::new(Config::default());
 
     info!(config.port, "Kerma node starting up ");
     let peer_map = peers::load_from_disk();

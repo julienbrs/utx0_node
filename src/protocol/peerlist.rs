@@ -24,6 +24,7 @@ impl TryFrom<&str> for Peer {
 
         let port: u16 = port_raw.parse()?;
 
+        // todo: use PeerParseError
         let host = if let Ok(ipv4) = host_raw.parse::<Ipv4Addr>() {
             ipv4.to_string()
         } else if is_valid_dns_name(host_raw) {

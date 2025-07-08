@@ -54,3 +54,5 @@ pub enum PeersError {
     #[error("Invalid peer format")]
     InvalidPeer,
 }
+
+// TODO: unit tests
