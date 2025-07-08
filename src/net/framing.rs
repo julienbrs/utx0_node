@@ -8,7 +8,7 @@ pub async fn read_frame<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<Messa
     let mut line = String::new();
     let n = limited_reader.read_line(&mut line).await.map_err(ProtocolError::Io)?;
 
-    if n == RECV_BUFFER_LIMIT && !line.ends_with('\n') {
+    if n >= RECV_BUFFER_LIMIT {
         return Err(ProtocolError::OversizedFrame); // frame too big
     }
 
@@ -73,7 +73,14 @@ mod tests {
         assert_eq!(parsed, msg);
     }
 
-    // TODO
     #[tokio::test]
-    async fn oversized_frame_rejected() {}
+    async fn oversized_frame_rejected() {
+        let (client, mut server) = tokio::io::duplex(600_000);
+        let big = "A".repeat(RECV_BUFFER_LIMIT + 1) + "\n";
+        server.write_all(big.as_bytes()).await.unwrap();
+
+        let mut reader = BufReader::new(client);
+        let res = read_frame(&mut reader).await;
+        assert!(matches!(res, Err(ProtocolError::OversizedFrame)));
+    }
 }
