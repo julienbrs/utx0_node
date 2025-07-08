@@ -1,13 +1,13 @@
 use serde::{Deserialize, Serialize};
 
-use crate::protocol::peerlist::PeerAddr;
+use crate::protocol::peerlist::Peer;
 
 // TODO: forbid unwanted extra fields when deserialize w/ deny_unknown_fields. But doesnt work for enum
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
 #[serde(tag = "type")]
 pub enum Message {
     Hello { port: u16, user_agent: String },
-    Peers { peers: Vec<PeerAddr> },
+    Peers { peers: Vec<Peer> },
     GetPeers,
     Error { name: String, msg: String },
 }
@@ -17,7 +17,7 @@ impl Message {
         Self::Hello { port, user_agent }
     }
 
-    pub fn mk_peers(peers: Vec<PeerAddr>) -> Self {
+    pub fn mk_peers(peers: Vec<Peer>) -> Self {
         Self::Peers { peers }
     }
 
@@ -49,9 +49,9 @@ mod tests {
 
     #[test]
     fn test_back_and_forth_peers() {
-        let peer1 = PeerAddr { host: "127.0.0.1".to_string(), port: 18018 };
-        let peer2 = PeerAddr { host: "node.peer.com".to_string(), port: 18018 };
-        let peers: Vec<PeerAddr> = vec![peer1, peer2];
+        let peer1 = Peer { host: "127.0.0.1".to_string(), port: 18018 };
+        let peer2 = Peer { host: "node.peer.com".to_string(), port: 18018 };
+        let peers: Vec<Peer> = vec![peer1, peer2];
         let peers_msg: Message = Message::Peers { peers };
 
         let peers_json =
@@ -134,8 +134,8 @@ mod tests {
     #[test]
     fn test_mk_peers() {
         let peers = vec![
-            PeerAddr { host: "localhost".to_string(), port: 18018 },
-            PeerAddr { host: "8.8.8.8".to_string(), port: 18018 },
+            Peer { host: "localhost".to_string(), port: 18018 },
+            Peer { host: "8.8.8.8".to_string(), port: 18018 },
         ];
         let msg = Message::mk_peers(peers.clone());
 
