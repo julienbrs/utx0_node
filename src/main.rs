@@ -9,6 +9,7 @@ mod config;
 mod error;
 mod net;
 mod protocol;
+mod state;
 mod util;
 
 use config::Config;
