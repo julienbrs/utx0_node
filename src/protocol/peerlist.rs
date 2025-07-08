@@ -3,7 +3,7 @@ use thiserror::Error;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct Peer {
     pub host: String,
     pub port: u16,
@@ -20,17 +20,19 @@ impl TryFrom<&str> for Peer {
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         let (host_raw, port_raw) =
-            str::rsplit_once(&value, ':').ok_or(PeerParseError::MissingSeparator)?;
+            str::rsplit_once(&value.trim(), ':').ok_or(PeerParseError::MissingSeparator)?;
 
         let port: u16 = port_raw.parse()?;
 
-        if let Ok(_) = host_raw.parse::<Ipv4Addr>() {
+        let host = if let Ok(ipv4) = host_raw.parse::<Ipv4Addr>() {
+            ipv4.to_string()
         } else if is_valid_dns_name(host_raw) {
+            host_raw.trim().to_string()
         } else {
             return Err(PeerParseError::InvalidHostname(host_raw.to_string()));
-        }
+        };
 
-        Ok(Peer { host: host_raw.to_string(), port: port })
+        Ok(Peer { host, port })
     }
 }
 

@@ -13,9 +13,11 @@ mod state;
 mod util;
 
 use config::Config;
+use tracing::info;
 use util::logging::init_logging;
 
-use tracing::info;
+use crate::protocol::peerlist;
+use crate::state::peers;
 
 #[tokio::main]
 async fn main() {
@@ -23,4 +25,9 @@ async fn main() {
     let config = Config::default();
 
     info!(config.port, "Kerma node starting up ");
+    let peer_map = peers::load_from_disk();
+    info!(count = peer_map.len(), "Loaded peers from disk");
+    let peer = peerlist::Peer::try_from("192.168.1.1:8080").unwrap();
+    peers::append_peer(&peer_map, &peer).unwrap();
+    info!(count = peer_map.len(), "After, peers from disk");
 }
