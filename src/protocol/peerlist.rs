@@ -19,7 +19,7 @@ impl TryFrom<&str> for Peer {
     type Error = PeerParseError;
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
-        let (host_raw, port_raw) = str::rsplit_once(&value, ':').unwrap(); // TODO: error handling
+        let (host_raw, port_raw) = str::rsplit_once(&value, ':').ok_or(PeerParseError::MissingSeparator)?;
 
         let port: u16 = port_raw.parse()?;
 
