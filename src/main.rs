@@ -7,6 +7,7 @@
 
 mod config;
 mod error;
+mod net;
 mod protocol;
 mod util;
 
