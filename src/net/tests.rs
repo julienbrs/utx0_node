@@ -5,9 +5,10 @@ use crate::{
         framing::{read_frame, write_frame},
         listener::serve,
     },
-    protocol::message::Message,
+    protocol::{message::Message, peerlist::Peer},
 };
 use core::panic;
+use dashmap::DashMap;
 use std::{sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, BufReader, BufWriter, split},
@@ -19,12 +20,13 @@ use tokio::{
 async fn accept_hello_and_replies() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
+    let peers_map: Arc<DashMap<Peer, ()>> = Arc::new(DashMap::new());
 
     let cfg = Arc::new(Config { port, user_agent: "foo_user".into() });
     let server_task = tokio::spawn({
         let cfg = cfg.clone();
         async move {
-            serve(listener, cfg).await.unwrap();
+            serve(listener, cfg, peers_map).await.unwrap();
         }
     });
 
@@ -53,12 +55,13 @@ async fn accept_hello_and_replies() {
 async fn rejects_wrong_first_message() {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
+    let peers_map: Arc<DashMap<Peer, ()>> = Arc::new(DashMap::new());
 
     let cfg = Arc::new(Config::default());
     let server_task = tokio::spawn({
         let cfg = cfg.clone();
         async move {
-            serve(listener, cfg).await.unwrap();
+            serve(listener, cfg, peers_map).await.unwrap();
         }
     });
 

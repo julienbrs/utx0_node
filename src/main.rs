@@ -33,5 +33,5 @@ async fn main() {
     peers::append_peer(&peer_map, &peer).unwrap();
     info!(count = peer_map.len(), "After, peers from disk");
 
-    net::listener::start_listening(config).await.unwrap();
+    net::listener::start_listening(config, peer_map).await.unwrap();
 }
