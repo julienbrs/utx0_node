@@ -32,4 +32,6 @@ async fn main() {
     let peer = peerlist::Peer::try_from("192.168.1.1:8080").unwrap();
     peers::append_peer(&peer_map, &peer).unwrap();
     info!(count = peer_map.len(), "After, peers from disk");
+
+    net::listener::start_listening(config).await.unwrap();
 }

@@ -12,18 +12,24 @@ use tokio::{
     time::{Duration, timeout},
 };
 
-pub async fn start_listening(config: Arc<Config>) -> Result<(), ProtocolError> {
-    let listener = TcpListener::bind(("0.0.0.0", config.port)).await.unwrap();
+pub async fn serve(listener: TcpListener, config: Arc<Config>) -> Result<(), ProtocolError> {
     loop {
         let (socket, peer_addr) = listener.accept().await?;
         tracing::info!(%peer_addr, "New connection");
-        let config = config.clone();
+        let cfg = config.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(socket, config).await {
-                tracing::warn!(error = %e,  "Connection handler failed");
+            if let Err(e) = handle_connection(socket, cfg).await {
+                tracing::warn!(error = %e, "Connection handler failed");
             }
         });
     }
+}
+
+pub async fn start_listening(config: Arc<Config>) -> Result<(), ProtocolError> {
+    let addr = ("0.0.0.0", config.port);
+    let listener = TcpListener::bind(addr).await?;
+    tracing::info!(port = config.port, "Listening on port {}", config.port);
+    serve(listener, config).await
 }
 
 pub async fn handle_connection(
