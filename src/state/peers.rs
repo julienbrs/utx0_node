@@ -1,4 +1,5 @@
 use std::io::Write;
+use std::path::Path;
 use std::sync::Arc;
 use std::{
     fs::{File, OpenOptions},
@@ -11,7 +12,11 @@ use thiserror::Error;
 
 pub type PeerMap = Arc<DashMap<Peer, ()>>;
 
-pub fn append_peer(map: &DashMap<Peer, ()>, peer: &Peer) -> Result<(), PeersError> {
+pub fn append_peer<P: AsRef<Path>>(
+    path: P,
+    map: &DashMap<Peer, ()>,
+    peer: &Peer,
+) -> Result<(), PeersError> {
     if map.contains_key(&peer) {
         return Ok(()); // Already present
     }
@@ -19,18 +24,16 @@ pub fn append_peer(map: &DashMap<Peer, ()>, peer: &Peer) -> Result<(), PeersErro
     map.insert(peer.clone(), ());
     let key = format!("{},{}", peer.host, peer.port);
 
-    let mut file: File = OpenOptions::new().append(true).create(true).open("peers.csv")?;
-
+    let mut file = OpenOptions::new().append(true).create(true).open(path)?;
     writeln!(file, "{}", key)?;
     Ok(())
 }
 
-pub fn load_from_disk() -> PeerMap {
+pub fn load_from_disk<P: AsRef<Path>>(path: P) -> PeerMap {
     let map: DashMap<Peer, ()> = DashMap::new();
 
-    if let Ok(file) = File::open("peers.csv") {
-        let reader = BufReader::new(file);
-        for line in reader.lines().flatten() {
+    if let Ok(f) = File::open(path) {
+        for line in BufReader::new(f).lines().flatten() {
             let mut parts = line.trim().split(',');
             if let (Some(host), Some(port_str)) = (parts.next(), parts.next()) {
                 if let Ok(port) = port_str.parse::<u16>() {

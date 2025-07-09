@@ -122,7 +122,7 @@ pub async fn handle_connection(
             Message::Peers { peers } => {
                 tracing::debug!(?peers, "Adding their peers to mine");
                 for peer in peers {
-                    append_peer(&peers_map, &peer).unwrap();
+                    append_peer(&config.peers_file, &peers_map, &peer).unwrap();
                 }
             }
 
