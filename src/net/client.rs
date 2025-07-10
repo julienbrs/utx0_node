@@ -37,11 +37,18 @@ pub async fn outbound_loop(
                 let oc = outbound_connections.clone();
                 let peer_for_spawn = peer.clone();
                 let handle: JoinHandle<()> = tokio::spawn(async move {
-                    if let Err(e) = connect_and_handshake(&cfg, &peer_for_spawn).await {
-                        tracing::warn!(peer = %peer_for_spawn, error = %e, "Handshake outbound failed");
-                        return;
-                    }
-                    if let Err(e) = run_message_loop(peer_for_spawn.clone(), pm.clone()).await {
+                    let (reader, writer) = match connect_and_handshake(&cfg, &peer_for_spawn).await
+                    {
+                        Ok((r, w)) => (r, w),
+                        Err(e) => {
+                            tracing::warn!(peer = %peer_for_spawn, error = %e, "Handshake outbound failed");
+                            return;
+                        }
+                    };
+
+                    if let Err(e) =
+                        run_message_loop((reader, writer), peer_for_spawn.clone(), pm.clone()).await
+                    {
                         tracing::warn!(peer_for_spawn = %peer_for_spawn, error = %e, "Outbound loop failed");
                     }
                     oc.remove(&peer_for_spawn);

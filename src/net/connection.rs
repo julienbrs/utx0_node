@@ -13,12 +13,18 @@ use crate::{
     protocol::{message::Message, peerlist::Peer},
 };
 
-pub async fn connect_and_handshake(config: &Config, peer: &Peer) -> Result<(), ProtocolError> {
+pub async fn connect_and_handshake(
+    config: &Config,
+    peer: &Peer,
+) -> Result<
+    (BufReader<tokio::io::ReadHalf<TcpStream>>, BufWriter<tokio::io::WriteHalf<TcpStream>>),
+    ProtocolError,
+> {
     tracing::info!(peer = %peer, "Dialing outbound peer");
     let stream = TcpStream::connect((peer.host.as_str(), peer.port)).await?;
     let (r, w) = split(stream);
-    let mut reader = BufReader::new(r);
-    let mut writer = BufWriter::new(w);
+    let mut reader: BufReader<tokio::io::ReadHalf<TcpStream>> = BufReader::new(r);
+    let mut writer: BufWriter<tokio::io::WriteHalf<TcpStream>> = BufWriter::new(w);
 
     let hello = Message::mk_hello(config.port, config.user_agent.clone());
     write_frame(&mut writer, &hello).await?;
@@ -33,21 +39,20 @@ pub async fn connect_and_handshake(config: &Config, peer: &Peer) -> Result<(), P
     match their_hello {
         Message::Hello { port, user_agent } => {
             tracing::info!(peer = %peer, %port, %user_agent, "Outbound handshake OK");
-            Ok(())
+            Ok((reader, writer))
         }
         _ => Err(ProtocolError::InvalidHandshake),
     }
 }
 
 pub async fn run_message_loop(
+    (mut reader, mut writer): (
+        BufReader<tokio::io::ReadHalf<TcpStream>>,
+        BufWriter<tokio::io::WriteHalf<TcpStream>>,
+    ),
     peer: Peer,
     peers_map: Arc<DashMap<Peer, ()>>,
 ) -> Result<(), ProtocolError> {
-    let stream = TcpStream::connect((peer.host.as_str(), peer.port)).await?;
-    let (r, w) = split(stream);
-    let mut reader = BufReader::new(r);
-    let mut writer = BufWriter::new(w);
-
     let gp = Message::mk_getpeers();
     write_frame(&mut writer, &gp).await?;
 

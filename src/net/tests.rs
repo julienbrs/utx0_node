@@ -3,11 +3,12 @@ use tempfile::NamedTempFile;
 use crate::{
     config::Config,
     net::{
+        client::outbound_loop,
         framing::{read_frame, write_frame},
-        listener::serve,
+        listener::{serve, start_listening},
     },
     protocol::{message::Message, peerlist::Peer},
-    state::peers,
+    state::{connection::new_outbound_map, peers},
 };
 use core::panic;
 use dashmap::DashMap;
@@ -15,6 +16,7 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, BufReader, BufWriter, ReadHalf, WriteHalf, split},
     net::{TcpListener, TcpStream},
+    sync::Barrier,
     time::{sleep, timeout},
 };
 
@@ -31,7 +33,7 @@ async fn util_spawn_test_server()
         user_agent: "test/0.1".into(),
         peers_file: peers_path.clone(),
         max_outbound_connection: 4,
-        service_loop_delay: 20,
+        service_loop_delay: 2,
     });
 
     let server_task = {
@@ -159,4 +161,103 @@ async fn rejects_wrong_first_message() {
     assert_eq!(eof, 0, "socket not closed after invalid handshake");
 
     server.abort();
+}
+
+#[tokio::test]
+async fn two_nodes_discover_each_other() {
+    let l1 = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port1 = l1.local_addr().unwrap().port();
+    let l2 = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port2 = l2.local_addr().unwrap().port();
+    // we drop listeners for the moment, we will reopen it with start_listening
+    drop(l1);
+    drop(l2);
+
+    let file1 = NamedTempFile::new().unwrap();
+    let file2 = NamedTempFile::new().unwrap();
+
+    let cfg1 = Config {
+        port: port1,
+        user_agent: "node1".to_string(),
+        peers_file: PathBuf::from(file1.path()),
+        max_outbound_connection: 4,
+        service_loop_delay: 1,
+    };
+    let cfg1 = Arc::new(cfg1);
+    let cfg2 = Config {
+        port: port2,
+        user_agent: "node2".to_string(),
+        peers_file: PathBuf::from(file2.path()),
+        max_outbound_connection: 4,
+        service_loop_delay: 1,
+    };
+    let cfg2 = Arc::new(cfg2);
+
+    // initialising peers file with address of each other
+    let pm1: Arc<DashMap<Peer, ()>> = peers::load_from_disk(&cfg1.peers_file);
+    pm1.insert(Peer { host: "127.0.0.1".into(), port: port2 }, ());
+
+    let pm2: Arc<DashMap<Peer, ()>> = peers::load_from_disk(&cfg2.peers_file);
+    pm2.insert(Peer { host: "127.0.0.1".into(), port: port1 }, ());
+
+    // outbound connections empty at start
+    let oc1 = new_outbound_map();
+    let oc2 = new_outbound_map();
+
+    let barrier = Arc::new(Barrier::new(4));
+
+    // starting the 2 listeners
+    let b1 = barrier.clone();
+    let l1_task = {
+        let cfg = cfg1.clone();
+        let pm = pm1.clone();
+        tokio::spawn(async move {
+            b1.wait().await;
+            start_listening(cfg, pm).await.unwrap();
+        })
+    };
+    let b2 = barrier.clone();
+    let l2_task = {
+        let cfg = cfg2.clone();
+        let pm = pm2.clone();
+        tokio::spawn(async move {
+            b2.wait().await;
+            start_listening(cfg, pm).await.unwrap();
+        })
+    };
+
+    // starting the 2 outbound loops
+    let b3 = barrier.clone();
+    let o1_task = {
+        let cfg = cfg1.clone();
+        let pm = pm1.clone();
+        let out = oc1.clone();
+        tokio::spawn(async move {
+            b3.wait().await;
+            outbound_loop(cfg, out, pm).await;
+        })
+    };
+    let b4 = barrier.clone();
+    let o2_task = {
+        let cfg = cfg2.clone();
+        let pm = pm2.clone();
+        let out = oc2.clone();
+        tokio::spawn(async move {
+            b4.wait().await;
+            outbound_loop(cfg, out, pm).await;
+        })
+    };
+
+    sleep(Duration::from_secs(&cfg1.service_loop_delay * 2)).await;
+
+    let peer1 = Peer { host: "127.0.0.1".into(), port: port2 };
+    let peer2 = Peer { host: "127.0.0.1".into(), port: port1 };
+
+    assert!(oc1.contains_key(&peer1), "Node1 n'a pas ouvert de connexion vers Node2");
+    assert!(oc2.contains_key(&peer2), "Node2 n'a pas ouvert de connexion vers Node1");
+
+    l1_task.abort();
+    l2_task.abort();
+    o1_task.abort();
+    o2_task.abort();
 }

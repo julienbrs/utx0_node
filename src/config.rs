@@ -2,7 +2,7 @@ use std::path::PathBuf;
 const MAX_OUTBOUND: usize = 4;
 const SERVICE_LOOP_DELAY: u64 = 20;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Config {
     pub port: u16,
     pub user_agent: String,
