@@ -20,6 +20,7 @@ use tracing::info;
 use util::logging::init_logging;
 
 use crate::protocol::peerlist;
+use crate::state::connection::new_outbound_map;
 use crate::state::peers;
 
 #[tokio::main]
@@ -27,13 +28,24 @@ async fn main() {
     init_logging();
     let config = Arc::new(Config::default());
     info!(config.port, "Kerma node starting up ");
-    let peers_file = PathBuf::from("peers.csv");
 
+    let peers_file = PathBuf::from("peers.csv");
     let peer_map = peers::load_from_disk(&peers_file);
     info!(count = peer_map.len(), "Loaded peers from disk");
     let peer = peerlist::Peer::try_from("192.168.1.1:8080").unwrap();
     peers::append_peer(&peers_file, &peer_map, &peer).unwrap();
-    info!(count = peer_map.len(), "After, peers from disk");
+    info!(count = peer_map.len(), "After, peers registered");
+
+    // handling outbound connections
+    let outbound = new_outbound_map();
+    {
+        let cfg2 = config.clone();
+        let pm2 = peer_map.clone();
+        let out2 = outbound.clone();
+        tokio::spawn(async move {
+            net::client::outbound_loop(cfg2, out2, pm2).await;
+        });
+    }
 
     net::listener::start_listening(config, peer_map).await.unwrap();
 }
