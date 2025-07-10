@@ -26,8 +26,13 @@ async fn util_spawn_test_server()
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let peers_map = peers::load_from_disk(&peers_path);
-    let cfg =
-        Arc::new(Config { port, user_agent: "test/0.1".into(), peers_file: peers_path.clone(), max_outbound_connection: 4 });
+    let cfg = Arc::new(Config {
+        port,
+        user_agent: "test/0.1".into(),
+        peers_file: peers_path.clone(),
+        max_outbound_connection: 4,
+        service_loop_delay: 20,
+    });
 
     let server_task = {
         let peers_map = peers_map.clone();

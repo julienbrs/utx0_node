@@ -13,8 +13,6 @@ use crate::{
     protocol::{message::Message, peerlist::Peer},
 };
 
-const TIMEOUT_HELLO: u64 = 20;
-
 pub async fn connect_and_handshake(config: &Config, peer: &Peer) -> Result<(), ProtocolError> {
     tracing::info!(peer = %peer, "Dialing outbound peer");
     let stream = TcpStream::connect((peer.host.as_str(), peer.port)).await?;
@@ -25,10 +23,12 @@ pub async fn connect_and_handshake(config: &Config, peer: &Peer) -> Result<(), P
     let hello = Message::mk_hello(config.port, config.user_agent.clone());
     write_frame(&mut writer, &hello).await?;
 
-    let their_hello =
-        tokio::time::timeout(Duration::from_secs(TIMEOUT_HELLO), read_frame(&mut reader))
-            .await
-            .map_err(|_| ProtocolError::InvalidHandshake)??;
+    let their_hello = tokio::time::timeout(
+        Duration::from_secs(config.service_loop_delay),
+        read_frame(&mut reader),
+    )
+    .await
+    .map_err(|_| ProtocolError::InvalidHandshake)??;
 
     match their_hello {
         Message::Hello { port, user_agent } => {
@@ -78,5 +78,77 @@ pub async fn run_message_loop(
                 tracing::debug!(peer = %peer, ?other, "Ignored message");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use std::{path::PathBuf, time::Duration};
+
+    use tokio::{
+        io::{BufReader, BufWriter},
+        net::TcpListener,
+    };
+
+    use crate::{
+        config::Config,
+        error::ProtocolError,
+        net::{
+            connection::connect_and_handshake,
+            framing::{read_frame, write_frame},
+        },
+        protocol::{message::Message, peerlist::Peer},
+    };
+
+    #[tokio::test]
+    async fn handshake_ok() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let server = tokio::spawn(async move {
+            let (sock, _) = listener.accept().await.unwrap();
+            let (r, w) = tokio::io::split(sock);
+            let mut reader = BufReader::new(r);
+            let mut writer = BufWriter::new(w);
+
+            // read the client's hello (sent in connect and handshake)
+            let msg = read_frame(&mut reader).await.unwrap();
+            assert!(matches!(msg, Message::Hello { .. }));
+            // send back hello to the client for the read_frame call in connect_and_handshake
+            let hello = Message::mk_hello(port, "srv".into());
+            write_frame(&mut writer, &hello).await.unwrap();
+        });
+
+        let cfg = Config::default();
+        let peer = Peer { host: "127.0.0.1".into(), port };
+        let res = connect_and_handshake(&cfg, &peer).await;
+        assert!(res.is_ok());
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn handshake_timeout() {
+        // server never sends back hello
+        let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        let _server = tokio::spawn(async move {
+            let (_socket, _) = listener.accept().await.unwrap();
+            // do nothing to timeout in connect_and_handshake
+            tokio::time::sleep(Duration::from_secs(60)).await;
+        });
+
+        let cfg = Config {
+            port: 0,
+            user_agent: "test".into(),
+            peers_file: PathBuf::from("peers.csv"),
+            max_outbound_connection: 4,
+            service_loop_delay: 1,
+        };
+        let peer = Peer { host: "127.0.0.1".into(), port };
+        let res = connect_and_handshake(&cfg, &peer).await;
+        dbg!(&res);
+        assert!(matches!(res, Err(ProtocolError::InvalidHandshake)));
     }
 }
