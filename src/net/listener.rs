@@ -8,6 +8,7 @@ use crate::{
     state::peers::append_peer,
 };
 use dashmap::DashMap;
+use rand::{rng, seq::SliceRandom};
 use tokio::{
     io::{BufReader, BufWriter, split},
     net::{TcpListener, TcpStream},
@@ -112,20 +113,32 @@ pub async fn handle_connection(
 
         match msg {
             Message::GetPeers => {
-                let peers_vec: Vec<Peer> =
-                    peers_map.iter().map(|pair| pair.key().clone()).collect();
-                tracing::debug!(
-                    ?peers_vec,
-                    "I am {}, Sending my peers to other",
-                    &config.user_agent
-                );
-                let msg_peers = Message::mk_peers(peers_vec);
-                write_frame(&mut writer, &msg_peers).await.unwrap();
+                let msg_peers = {
+                    let mut rng = rng();
+                    let mut candidates: Vec<Peer> = peers_map
+                        .iter()
+                        .map(|e| e.key().clone())
+                        .filter(|p| !config.banned_hosts.contains(p))
+                        .collect();
+
+                    candidates.shuffle(&mut rng);
+                    candidates.truncate(10); // TODO: stop hardcoding that, and keep track of inbound connection to set a max
+
+
+                    if config.public_node {
+                        let me = Peer {host: config.my_host.clone(), port: config.port};
+                        candidates.retain(|p| p != &me);
+                        candidates.insert(0, me);
+                    }
+                    Message::mk_peers(candidates)
+                };
+                write_frame(&mut writer, &msg_peers).await?;
             }
 
             Message::Peers { peers } => {
-                tracing::debug!(?peers, "I am {}, Adding their peers to mine", &config.user_agent);
-                for peer in peers {
+                let candidates: Vec<Peer> = peers.iter().filter(|p| !&config.banned_hosts.contains(p)).cloned().collect();
+                tracing::debug!(?candidates, "I am {}, Adding their peers to mine", &config.user_agent);
+                for peer in candidates {
                     append_peer(&config.peers_file, &peers_map, &peer).unwrap();
                 }
             }
