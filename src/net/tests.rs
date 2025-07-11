@@ -103,16 +103,18 @@ async fn test_getpeers_empty() {
 
     assert_eq!(_peers_map.len(), 0);
 
-    // we are asking for peers
-    let other_getpeers = Message::mk_getpeers();
-    write_frame(&mut writer, &other_getpeers).await.unwrap();
+    // since there are no *other* peers, we expect exactly our own address back
+    let getpeers = Message::mk_getpeers();
+    write_frame(&mut writer, &getpeers).await.unwrap();
 
-    let resp = read_frame(&mut reader).await;
-    match resp {
-        Ok(Message::Peers { peers }) => {
-            assert_eq!(peers.len(), 0);
-        }
-        other => panic!("expected Peers{{[]}}, got {:?}", other),
+    let resp = read_frame(&mut reader).await.expect("did not get a Peers reply");
+    if let Message::Peers { peers } = resp {
+        // exactly one: ourselves
+        assert_eq!(peers.len(), 1);
+        let me = Peer { host: "0.0.0.0".into(), port };
+        assert_eq!(peers[0], me);
+    } else {
+        panic!("expected Peers{{…}}, got {:?}", resp);
     }
 
     server.abort();

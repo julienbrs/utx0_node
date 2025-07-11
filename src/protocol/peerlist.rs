@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Eq, Hash)]
 pub struct Peer {
-    pub host: String,
+    pub host: String,     // e.g. "127.0.0.1" or "node.example.com" in the future TODO
     pub port: u16,
 }
 

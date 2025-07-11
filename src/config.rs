@@ -26,8 +26,7 @@ impl Config {
 
     pub fn new(port: u16, user_agent: impl Into<String>, peers_file: impl Into<PathBuf>) -> Self {
         // we bind to 0.0.0.0:<port> for incoming, and advertise that.
-        let my_host = format!("0.0.0.0:{}", port);
-
+        let my_host = "0.0.0.0".to_string();
         Config {
             port,
             user_agent: user_agent.into(),
@@ -47,8 +46,7 @@ impl Config {
         user_agent: impl Into<String>,
         peers_file: impl Into<PathBuf>,
     ) -> Self {
-        let my_host = format!("0.0.0.0:{}", port);
-
+        let my_host = "0.0.0.0".to_string();
         Config {
             port,
             user_agent: user_agent.into(),
@@ -94,6 +92,6 @@ mod tests {
 
         assert!(cfg.banned_hosts.is_empty());
         assert!(cfg.public_node);
-        assert_eq!(cfg.my_host, "0.0.0.0:1337");
+        assert_eq!(cfg.my_host, "0.0.0.0");
     }
 }

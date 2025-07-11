@@ -5,10 +5,9 @@ use crate::{
     error::ProtocolError,
     net::framing::{read_frame, write_frame},
     protocol::{message::Message, peerlist::Peer},
-    state::peers::append_peer,
 };
 use dashmap::DashMap;
-use rand::{rng, seq::SliceRandom};
+
 use tokio::{
     io::{BufReader, BufWriter, split},
     net::{TcpListener, TcpStream},
@@ -77,79 +76,6 @@ pub async fn handle_connection(
     let gp = Message::mk_getpeers();
     write_frame(&mut writer, &gp).await?;
 
-    loop {
-        let msg = match read_frame(&mut reader).await {
-            Ok(m) => {
-                tracing::debug!(?m, "I am {}, Received message", &config.user_agent);
-                m
-            }
-            Err(e) => {
-                match e {
-                    ProtocolError::OversizedFrame | ProtocolError::InvalidFormat => {
-                        tracing::warn!(error = %e, "Malformed frame from peer; closing connection");
-                        let err_msg: Message = e.into();
-                        write_frame(&mut writer, &err_msg).await?;
-                    }
-
-                    ProtocolError::ConnectionClosed => {
-                        tracing::info!("Peer closed the connection");
-                    }
-
-                    ProtocolError::Io(io_err) => {
-                        // sending error back to writer? it might be broken so better not
-                        tracing::warn!(error = %io_err, "I/O error reading from socket");
-                    }
-
-                    // shouldn't happen
-                    ProtocolError::InvalidHandshake => {
-                        let err_msg: Message = e.into();
-                        let _ = write_frame(&mut writer, &err_msg).await;
-                        tracing::warn!("Handshake error in main loop");
-                    }
-                }
-                return Ok(());
-            }
-        };
-
-        match msg {
-            Message::GetPeers => {
-                let msg_peers = {
-                    let mut rng = rng();
-                    let mut candidates: Vec<Peer> = peers_map
-                        .iter()
-                        .map(|e| e.key().clone())
-                        .filter(|p| !config.banned_hosts.contains(p))
-                        .collect();
-
-                    candidates.shuffle(&mut rng);
-                    candidates.truncate(10); // TODO: stop hardcoding that, and keep track of inbound connection to set a max
-
-
-                    if config.public_node {
-                        let me = Peer {host: config.my_host.clone(), port: config.port};
-                        candidates.retain(|p| p != &me);
-                        candidates.insert(0, me);
-                    }
-                    Message::mk_peers(candidates)
-                };
-                write_frame(&mut writer, &msg_peers).await?;
-            }
-
-            Message::Peers { peers } => {
-                let candidates: Vec<Peer> = peers.iter().filter(|p| !&config.banned_hosts.contains(p)).cloned().collect();
-                tracing::debug!(?candidates, "I am {}, Adding their peers to mine", &config.user_agent);
-                for peer in candidates {
-                    append_peer(&config.peers_file, &peers_map, &peer).unwrap();
-                }
-            }
-
-            Message::Error { name, msg } => {
-                tracing::debug!(%name, %msg, "Received error from peer; ignoring");
-            }
-
-            other => {
-                tracing::debug!(?other, "Unhandled message type; ignoring");
-            }
-        }
-    }
+    crate::net::dispatch::run_message_loop(reader, writer, config, peers_map).await?;
+    Ok(())
 }

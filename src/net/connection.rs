@@ -1,6 +1,5 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
-use dashmap::DashMap;
 use tokio::{
     io::{BufReader, BufWriter, split},
     net::TcpStream,
@@ -42,47 +41,6 @@ pub async fn connect_and_handshake(
             Ok((reader, writer))
         }
         _ => Err(ProtocolError::InvalidHandshake),
-    }
-}
-
-pub async fn run_message_loop(
-    (mut reader, mut writer): (
-        BufReader<tokio::io::ReadHalf<TcpStream>>,
-        BufWriter<tokio::io::WriteHalf<TcpStream>>,
-    ),
-    peer: Peer,
-    peers_map: Arc<DashMap<Peer, ()>>,
-) -> Result<(), ProtocolError> {
-    let gp = Message::mk_getpeers();
-    write_frame(&mut writer, &gp).await?;
-
-    loop {
-        let msg = match read_frame(&mut reader).await {
-            Ok(m) => m,
-            Err(e) => {
-                tracing::warn!(peer = %peer, error = %e, "Read error in outbound loop");
-                return Ok(());
-            }
-        };
-
-        match msg {
-            Message::GetPeers => {
-                let list: Vec<Peer> = peers_map.iter().map(|e| e.key().clone()).collect();
-                let reply = Message::mk_peers(list);
-                write_frame(&mut writer, &reply).await?;
-            }
-            Message::Peers { peers } => {
-                for newp in peers {
-                    peers_map.insert(newp, ());
-                }
-            }
-            Message::Error { name, msg } => {
-                tracing::debug!(peer = %peer, %name, %msg, "Peer error");
-            }
-            other => {
-                tracing::debug!(peer = %peer, ?other, "Ignored message");
-            }
-        }
     }
 }
 
