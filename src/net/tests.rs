@@ -18,10 +18,10 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{AsyncBufReadExt, BufReader, BufWriter, ReadHalf, WriteHalf, split},
+    io::{BufReader, BufWriter, ReadHalf, WriteHalf, split},
     net::{TcpListener, TcpStream},
     sync::Barrier,
-    time::{sleep, timeout},
+    time::sleep,
 };
 
 static INIT: Once = Once::new();
@@ -55,7 +55,7 @@ async fn util_spawn_test_server()
     (tmpfile, port, peers_map, server_task)
 }
 
-async fn util_connect_to(
+pub async fn util_connect_to(
     port: u16,
 ) -> (BufReader<ReadHalf<TcpStream>>, BufWriter<WriteHalf<TcpStream>>) {
     let sock = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
@@ -74,25 +74,6 @@ async fn util_complete_handshake(
     let _initial_gp = read_frame(reader).await?;
 
     Ok(())
-}
-
-#[tokio::test]
-async fn accept_hello_and_replies() {
-    let (_peer_file, port, _peers_map, server) = util_spawn_test_server().await;
-    let (mut reader, mut writer) = util_connect_to(port).await;
-
-    let client_hello = Message::mk_hello(12345, "foo_agent".into());
-    write_frame(&mut writer, &client_hello).await.unwrap();
-
-    sleep(Duration::from_secs(1)).await;
-
-    let resp1 = timeout(Duration::from_secs(1), read_frame(&mut reader)).await.unwrap().unwrap(); //TODO: double unwrap seems weird
-    assert!(matches!(resp1, Message::Hello { .. }));
-
-    let resp2 = timeout(Duration::from_secs(1), read_frame(&mut reader)).await.unwrap().unwrap();
-    assert!(matches!(resp2, Message::GetPeers));
-
-    server.abort();
 }
 
 #[tokio::test]
@@ -147,26 +128,6 @@ async fn test_peers_message_appends() {
     assert!(fresh_map.contains_key(&peer_a), "A missing");
     assert!(fresh_map.contains_key(&peer_b), "B missing");
     assert!(fresh_map.contains_key(&peer_c), "C missing");
-
-    server.abort();
-}
-
-#[tokio::test]
-async fn rejects_wrong_first_message() {
-    let (_peer_file, port, _peers_map, server) = util_spawn_test_server().await;
-    let (mut reader, mut writer) = util_connect_to(port).await;
-
-    let client_gp = Message::mk_getpeers();
-    write_frame(&mut writer, &client_gp).await.unwrap();
-
-    let err_msg = timeout(Duration::from_secs(1), read_frame(&mut reader)).await.unwrap().unwrap();
-    match err_msg {
-        Message::Error { name, .. } if name == "INVALID_HANDSHAKE" => {}
-        other => panic!("expected INVALID_HANDSHAKE, got {:?}", other),
-    }
-
-    let eof = reader.read_line(&mut String::new()).await.unwrap();
-    assert_eq!(eof, 0, "socket not closed after invalid handshake");
 
     server.abort();
 }
@@ -242,7 +203,7 @@ async fn two_nodes_discover_each_other() {
         })
     };
 
-    sleep(Duration::from_secs(&cfg1.service_loop_delay * 2)).await;
+    sleep(Duration::from_secs(cfg1.service_loop_delay * 2)).await;
 
     let peer1 = Peer { host: "127.0.0.1".into(), port: port2 };
     let peer2 = Peer { host: "127.0.0.1".into(), port: port1 };
