@@ -12,6 +12,8 @@ use crate::{
     state::peers::{PeersError, append_peer},
 };
 
+const MAX_PEERS_PER_REPLY: usize = 10;
+
 /// Pulls frames forever, applies the same dispatch logic for both inbound & outbound.
 /// Returns when the peer disconnects or a non-recoverable error occurs.
 pub async fn run_message_loop<R, W>(
@@ -56,7 +58,7 @@ async fn pick_and_build_peers(config: &Config, peers_map: &DashMap<Peer, ()>) ->
         .collect();
 
     candidates.shuffle(&mut rng);
-    candidates.truncate(10); // TODO: stop hardcoding that, and keep track of inbound connection to set a max
+    candidates.truncate(MAX_PEERS_PER_REPLY); // TODO: stop hardcoding that, and keep track of inbound connection to set a max
 
     if config.public_node {
         let me = Peer { host: config.my_host.clone(), port: config.port };

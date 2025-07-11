@@ -1,8 +1,8 @@
 pub mod client;
 pub mod connection;
+pub mod dispatch;
 pub mod framing;
 pub mod listener;
-pub mod dispatch;
 
 #[cfg(test)]
 mod tests;

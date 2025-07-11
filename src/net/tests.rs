@@ -5,7 +5,7 @@ use crate::{
     net::{
         client::outbound_loop,
         framing::{read_frame, write_frame},
-        listener::{serve, start_listening},
+        listener::start_listening,
     },
     protocol::{message::Message, peerlist::Peer},
     state::{connection::new_outbound_map, peers},
@@ -46,7 +46,7 @@ async fn util_spawn_test_server()
         let peers_map = peers_map.clone();
         let cfg = cfg.clone();
         tokio::spawn(async move {
-            serve(listener, cfg, peers_map).await.unwrap();
+            start_listening(cfg, peers_map).await.unwrap();
         })
     };
 

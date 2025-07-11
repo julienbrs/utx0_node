@@ -4,9 +4,7 @@ use dashmap::DashMap;
 use tokio::{task::JoinHandle, time::sleep};
 
 use crate::{
-    config::Config,
-    net::{connection::connect_and_handshake, dispatch::run_message_loop},
-    protocol::peerlist::Peer,
+    config::Config, net::dispatch::run_message_loop, protocol::peerlist::Peer,
     state::connection::ConnectionOutboundMap,
 };
 use rand::seq::IteratorRandom;
@@ -53,7 +51,7 @@ pub async fn outbound_loop(
                 let handle: JoinHandle<()> = tokio::spawn(async move {
                     tracing::debug!(%peer_for_task, %cfg_for_task.user_agent, "Starting handshake");
 
-                    let (reader, writer) = match connect_and_handshake(
+                    let (reader, writer) = match crate::protocol::handshake::outbound(
                         &cfg_for_task,
                         &peer_for_task,
                     )
