@@ -40,17 +40,11 @@ async fn util_spawn_test_server()
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let port = listener.local_addr().unwrap().port();
     let peers_map = peers::load_from_disk(&peers_path);
-    let cfg = Arc::new(Config {
-        port,
-        user_agent: "test/0.1".into(),
-        peers_file: peers_path.clone(),
-        max_outbound_connection: 4,
-        service_loop_delay: 2,
-    });
+    let cfg = Arc::new(Config::new_test(port, "test/0.1", tmpfile.path()));
 
     let server_task = {
         let peers_map = peers_map.clone();
-        let cfg: Arc<Config> = cfg.clone();
+        let cfg = cfg.clone();
         tokio::spawn(async move {
             serve(listener, cfg, peers_map).await.unwrap();
         })
@@ -188,22 +182,8 @@ async fn two_nodes_discover_each_other() {
     let file1 = NamedTempFile::new().unwrap();
     let file2 = NamedTempFile::new().unwrap();
 
-    let cfg1 = Config {
-        port: port1,
-        user_agent: "node1".to_string(),
-        peers_file: PathBuf::from(file1.path()),
-        max_outbound_connection: 4,
-        service_loop_delay: 1,
-    };
-    let cfg1 = Arc::new(cfg1);
-    let cfg2 = Config {
-        port: port2,
-        user_agent: "node2".to_string(),
-        peers_file: PathBuf::from(file2.path()),
-        max_outbound_connection: 4,
-        service_loop_delay: 1,
-    };
-    let cfg2 = Arc::new(cfg2);
+    let cfg1 = Arc::new(Config::new_test(port1, "node1", file1.path()));
+    let cfg2 = Arc::new(Config::new_test(port2, "node2", file2.path()));
 
     // initialising peers file with address of each other
     let pm1: Arc<DashMap<Peer, ()>> = peers::load_from_disk(&cfg1.peers_file);
@@ -293,27 +273,9 @@ async fn discovery_via_intermediary() {
     let file2 = NamedTempFile::new().unwrap();
     let file3 = NamedTempFile::new().unwrap();
 
-    let cfg1 = Arc::new(Config {
-        port: port1,
-        user_agent: "node1".to_string(),
-        peers_file: PathBuf::from(file1.path()),
-        max_outbound_connection: 4,
-        service_loop_delay: 1,
-    });
-    let cfg2 = Arc::new(Config {
-        port: port2,
-        user_agent: "node2".to_string(),
-        peers_file: PathBuf::from(file2.path()),
-        max_outbound_connection: 4,
-        service_loop_delay: 1,
-    });
-    let cfg3 = Arc::new(Config {
-        port: port3,
-        user_agent: "node3".to_string(),
-        peers_file: PathBuf::from(file3.path()),
-        max_outbound_connection: 4,
-        service_loop_delay: 1,
-    });
+    let cfg1 = Arc::new(Config::new_test(port1, "node1", file1.path()));
+    let cfg2 = Arc::new(Config::new_test(port2, "node2", file2.path()));
+    let cfg3 = Arc::new(Config::new_test(port3, "node3", file3.path()));
 
     let pm1: Arc<DashMap<Peer, ()>> = peers::load_from_disk(&cfg1.peers_file);
     let pm2: Arc<DashMap<Peer, ()>> = peers::load_from_disk(&cfg2.peers_file);

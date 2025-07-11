@@ -89,7 +89,7 @@ pub async fn run_message_loop(
 #[cfg(test)]
 mod tests {
 
-    use std::{path::PathBuf, time::Duration};
+    use std::time::Duration;
 
     use tokio::{
         io::{BufReader, BufWriter},
@@ -144,13 +144,10 @@ mod tests {
             tokio::time::sleep(Duration::from_secs(60)).await;
         });
 
-        let cfg = Config {
-            port: 0,
-            user_agent: "test".into(),
-            peers_file: PathBuf::from("peers.csv"),
-            max_outbound_connection: 4,
-            service_loop_delay: 1,
-        };
+        let mut cfg = Config::new(0, "test", "peers.csv");
+        cfg.max_outbound_connection = 4;
+        cfg.service_loop_delay = 1;
+
         let peer = Peer { host: "127.0.0.1".into(), port };
         let res = connect_and_handshake(&cfg, &peer).await;
         dbg!(&res);

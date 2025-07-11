@@ -26,7 +26,7 @@ use crate::state::peers;
 #[tokio::main]
 async fn main() {
     init_logging();
-    let config = Arc::new(Config::default());
+    let config = Arc::new(Config::new(18018, "utx0-v0.1", "peers.csv"));
     info!(config.port, "Kerma node starting up ");
 
     let peers_file = PathBuf::from("peers.csv");
