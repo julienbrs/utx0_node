@@ -57,7 +57,7 @@ pub async fn handle_connection(
 
     match hello_rcv {
         Message::Hello { port: peer_port, user_agent: peer_agent } => {
-            tracing::info!(%peer_port, %peer_agent, "Received Hello");
+            tracing::debug!(%peer_port, %peer_agent, "I am {}, Received Hello", &config.user_agent);
         }
         other => {
             // send an error and bail out
@@ -79,7 +79,7 @@ pub async fn handle_connection(
     loop {
         let msg = match read_frame(&mut reader).await {
             Ok(m) => {
-                tracing::info!(?m, "Received message");
+                tracing::debug!(?m, "I am {}, Received message", &config.user_agent);
                 m
             }
             Err(e) => {
@@ -114,13 +114,17 @@ pub async fn handle_connection(
             Message::GetPeers => {
                 let peers_vec: Vec<Peer> =
                     peers_map.iter().map(|pair| pair.key().clone()).collect();
-                tracing::debug!(?peers_vec, "Sending my peers to other");
+                tracing::debug!(
+                    ?peers_vec,
+                    "I am {}, Sending my peers to other",
+                    &config.user_agent
+                );
                 let msg_peers = Message::mk_peers(peers_vec);
                 write_frame(&mut writer, &msg_peers).await.unwrap();
             }
 
             Message::Peers { peers } => {
-                tracing::debug!(?peers, "Adding their peers to mine");
+                tracing::debug!(?peers, "I am {}, Adding their peers to mine", &config.user_agent);
                 for peer in peers {
                     append_peer(&config.peers_file, &peers_map, &peer).unwrap();
                 }

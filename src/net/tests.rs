@@ -12,13 +12,25 @@ use crate::{
 };
 use core::panic;
 use dashmap::DashMap;
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    path::PathBuf,
+    sync::{Arc, Once},
+    time::Duration,
+};
 use tokio::{
     io::{AsyncBufReadExt, BufReader, BufWriter, ReadHalf, WriteHalf, split},
     net::{TcpListener, TcpStream},
     sync::Barrier,
     time::{sleep, timeout},
 };
+
+static INIT: Once = Once::new();
+
+fn init_tracing() {
+    INIT.call_once(|| {
+        tracing_subscriber::fmt().with_max_level(tracing::Level::DEBUG).with_test_writer().init();
+    });
+}
 
 async fn util_spawn_test_server()
 -> (NamedTempFile, u16, Arc<DashMap<Peer, ()>>, tokio::task::JoinHandle<()>) {
@@ -253,11 +265,124 @@ async fn two_nodes_discover_each_other() {
     let peer1 = Peer { host: "127.0.0.1".into(), port: port2 };
     let peer2 = Peer { host: "127.0.0.1".into(), port: port1 };
 
-    assert!(oc1.contains_key(&peer1), "Node1 n'a pas ouvert de connexion vers Node2");
-    assert!(oc2.contains_key(&peer2), "Node2 n'a pas ouvert de connexion vers Node1");
+    assert!(oc1.contains_key(&peer1), "Node1 did not open connection to Node2");
+    assert!(oc2.contains_key(&peer2), "Node2 did not open connection to Node1");
 
     l1_task.abort();
     l2_task.abort();
     o1_task.abort();
     o2_task.abort();
+}
+
+#[tokio::test]
+async fn discovery_via_intermediary() {
+    // init_tracing();
+    let l1 = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port1 = l1.local_addr().unwrap().port();
+    let l2 = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port2 = l2.local_addr().unwrap().port();
+    let l3 = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+    let port3 = l3.local_addr().unwrap().port();
+    drop(l1);
+    drop(l2);
+    drop(l3);
+    let peer1 = Peer { host: "127.0.0.1".into(), port: port1 };
+    tracing::debug!(%peer1, "Aiming to propagate peer1");
+
+    let file1 = NamedTempFile::new().unwrap();
+    let file2 = NamedTempFile::new().unwrap();
+    let file3 = NamedTempFile::new().unwrap();
+
+    let cfg1 = Arc::new(Config {
+        port: port1,
+        user_agent: "node1".to_string(),
+        peers_file: PathBuf::from(file1.path()),
+        max_outbound_connection: 4,
+        service_loop_delay: 1,
+    });
+    let cfg2 = Arc::new(Config {
+        port: port2,
+        user_agent: "node2".to_string(),
+        peers_file: PathBuf::from(file2.path()),
+        max_outbound_connection: 4,
+        service_loop_delay: 1,
+    });
+    let cfg3 = Arc::new(Config {
+        port: port3,
+        user_agent: "node3".to_string(),
+        peers_file: PathBuf::from(file3.path()),
+        max_outbound_connection: 4,
+        service_loop_delay: 1,
+    });
+
+    let pm1: Arc<DashMap<Peer, ()>> = peers::load_from_disk(&cfg1.peers_file);
+    let pm2: Arc<DashMap<Peer, ()>> = peers::load_from_disk(&cfg2.peers_file);
+    let pm3: Arc<DashMap<Peer, ()>> = peers::load_from_disk(&cfg3.peers_file);
+
+    pm2.insert(Peer { host: "127.0.0.1".into(), port: port1 }, ());
+    pm3.insert(Peer { host: "127.0.0.1".into(), port: port2 }, ());
+
+    let oc2 = new_outbound_map();
+    let oc3 = new_outbound_map();
+
+    let barrier = Arc::new(Barrier::new(5));
+
+    let b1 = barrier.clone();
+    let l1_task = {
+        let cfg = cfg1.clone();
+        let pm = pm1.clone();
+        tokio::spawn(async move {
+            b1.wait().await;
+            start_listening(cfg, pm).await.unwrap();
+        })
+    };
+    let b2 = barrier.clone();
+    let l2_task = {
+        let cfg = cfg2.clone();
+        let pm = pm2.clone();
+        tokio::spawn(async move {
+            b2.wait().await;
+            start_listening(cfg, pm).await.unwrap();
+        })
+    };
+    let b3 = barrier.clone();
+    let l3_task = {
+        let cfg = cfg3.clone();
+        let pm = pm3.clone();
+        tokio::spawn(async move {
+            b3.wait().await;
+            start_listening(cfg, pm).await.unwrap();
+        })
+    };
+
+    let b4 = barrier.clone();
+    let o2_task = {
+        let cfg = cfg2.clone();
+        let pm = pm2.clone();
+        let oc = oc2.clone();
+        tokio::spawn(async move {
+            b4.wait().await;
+            outbound_loop(cfg, oc, pm).await;
+        })
+    };
+    let b5 = barrier.clone();
+    let o3_task = {
+        let cfg = cfg3.clone();
+        let pm = pm3.clone();
+        let oc = oc3.clone();
+        tokio::spawn(async move {
+            b5.wait().await;
+            outbound_loop(cfg, oc, pm).await;
+        })
+    };
+
+    sleep(Duration::from_secs(3)).await;
+
+    assert!(oc3.contains_key(&peer1), "Node3 did not discover Node1 via Node2");
+
+    l1_task.abort();
+    l2_task.abort();
+    l3_task.abort();
+    o2_task.abort();
+    o3_task.abort();
 }

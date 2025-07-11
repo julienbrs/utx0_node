@@ -8,7 +8,7 @@ pub struct Config {
     pub user_agent: String,
     pub peers_file: PathBuf,
     pub max_outbound_connection: usize,
-    pub service_loop_delay: u64,
+    pub service_loop_delay: u64, //TODO: we prob want service loop delay to be the same for every node, if so => private + getter
 }
 
 impl Default for Config {
