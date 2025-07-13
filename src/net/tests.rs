@@ -18,7 +18,7 @@ use std::{
     time::Duration,
 };
 use tokio::{
-    io::{BufReader, BufWriter, ReadHalf, WriteHalf, split},
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf, split},
     net::{TcpListener, TcpStream},
     sync::Barrier,
     time::sleep,
@@ -64,14 +64,16 @@ pub async fn util_connect_to(
 }
 
 async fn util_complete_handshake(
+    config: Arc<Config>,
     reader: &mut BufReader<ReadHalf<TcpStream>>,
     writer: &mut BufWriter<WriteHalf<TcpStream>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let client_hello = Message::mk_hello(11111, "test_client".into());
+    let client_hello = Message::mk_hello(config.port, config.user_agent.clone());
     write_frame(writer, &client_hello).await.unwrap();
     let _server_hello = read_frame(reader).await?;
 
     let _initial_gp = read_frame(reader).await?;
+    tracing::debug!(%config.port, %config.user_agent, "Handshake completed");
 
     Ok(())
 }
@@ -80,7 +82,8 @@ async fn util_complete_handshake(
 async fn test_getpeers_empty() {
     let (_peer_file, port, _peers_map, server) = util_spawn_test_server().await;
     let (mut reader, mut writer) = util_connect_to(port).await;
-    util_complete_handshake(&mut reader, &mut writer).await.unwrap();
+    let config = Arc::new(Config::new_test(port, "node2", _peer_file.path()));
+    util_complete_handshake(config, &mut reader, &mut writer).await.unwrap();
 
     assert_eq!(_peers_map.len(), 0);
 
@@ -104,6 +107,7 @@ async fn test_getpeers_empty() {
 #[tokio::test]
 async fn test_peers_message_appends() {
     let (tmp_peer_file, port, _, server) = util_spawn_test_server().await;
+    let config = Arc::new(Config::new_test(port, "node2", tmp_peer_file.path()));
 
     // we prepopulate peer A in the peers file
     let peer_a = Peer::try_from("127.0.0.1:1111").unwrap();
@@ -112,7 +116,7 @@ async fn test_peers_message_appends() {
 
     // connect and handshake
     let (mut reader, mut writer) = util_connect_to(port).await;
-    util_complete_handshake(&mut reader, &mut writer).await.unwrap();
+    util_complete_handshake(config, &mut reader, &mut writer).await.unwrap();
 
     // send Peers B and C
     let peer_b = Peer::try_from("127.0.0.2:2222").unwrap();
@@ -128,6 +132,59 @@ async fn test_peers_message_appends() {
     assert!(fresh_map.contains_key(&peer_a), "A missing");
     assert!(fresh_map.contains_key(&peer_b), "B missing");
     assert!(fresh_map.contains_key(&peer_c), "C missing");
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn malformed_json_extra_field_rejected() {
+    init_tracing();
+
+    let (_peer_file, port, _peers_map, server) = util_spawn_test_server().await;
+    let config = Arc::new(Config::new_test(port, "node2", _peer_file.path()));
+
+    let (mut reader, mut writer) = util_connect_to(port).await;
+    util_complete_handshake(config, &mut reader, &mut writer).await.unwrap();
+
+    // sending GetPeers with an unknown extra key
+    writer.write_all(b"{\"type\":\"GetPeers\",\"unexpected\":123}\n").await.unwrap();
+    writer.flush().await.unwrap();
+
+    // expecting one Error(INVALID_FORMAT) then socket close
+    let err = read_frame(&mut reader).await.unwrap();
+    if let Message::Error { name, .. } = err {
+        assert_eq!(name, "INVALID_FORMAT");
+    } else {
+        panic!("expected INVALID_FORMAT error, got {:?}", err);
+    }
+
+    // socket must now be closed
+    let eof = reader.read_line(&mut String::new()).await.unwrap();
+    assert_eq!(eof, 0);
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn unknown_message_type_ignored() {
+    // init_tracing();
+    let (_peer_file, port, _peers_map, server) = util_spawn_test_server().await;
+    let (mut reader, mut writer) = util_connect_to(port).await;
+    let config = Arc::new(Config::new_test(port, "node2", _peer_file.path()));
+
+    util_complete_handshake(config, &mut reader, &mut writer).await.unwrap();
+
+    // send a totally unknown type
+    writer.write_all(b"{\"type\":\"Foobar\"}\n").await.unwrap();
+    writer.flush().await.unwrap();
+
+    // no reply, connection should stay open.  Now send a valid GetPeers
+    writer.write_all(b"{\"type\":\"GetPeers\"}\n").await.unwrap();
+    writer.flush().await.unwrap();
+
+    // we should still get back a Peers response
+    let resp = read_frame(&mut reader).await.expect("expected Peers reply");
+    assert!(matches!(resp, Message::Peers { .. }));
 
     server.abort();
 }

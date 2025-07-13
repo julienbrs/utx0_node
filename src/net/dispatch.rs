@@ -27,9 +27,20 @@ where
     W: AsyncWrite + Unpin,
 {
     loop {
-        let msg = read_frame(&mut reader).await?;
+        let msg = match read_frame(&mut reader).await {
+            Ok(m) => m,
+            Err(ProtocolError::InvalidFormat | ProtocolError::OversizedFrame) => {
+                let err_msg: Message = ProtocolError::InvalidFormat.into();
+                write_frame(&mut writer, &err_msg).await?;
+                return Ok(());
+            }
+            Err(e) => return Err(e),
+        };
+
         match msg {
             Message::GetPeers => {
+                tracing::debug!(%config.user_agent, "Received GetPeers message");
+
                 let our_peers_to_send = pick_and_build_peers(&config, &peers_map).await;
                 let msg = Message::mk_peers(our_peers_to_send);
                 write_frame(&mut writer, &msg).await?;
@@ -42,8 +53,11 @@ where
             Message::Error { name, msg } => {
                 tracing::debug!(%name, %msg, "Peer error");
             }
-            other => {
-                tracing::debug!(?other, "Ignored message");
+            Message::Hello { port, user_agent } => {
+                tracing::debug!(%port, %user_agent, "Received unexpected Hello message, ignoring")
+            }
+            Message::Unknown => {
+                tracing::debug!("Received unexpected message type, ignoring");
             }
         }
     }

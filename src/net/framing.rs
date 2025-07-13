@@ -1,3 +1,4 @@
+use serde_json::Value;
 use tokio::io::{AsyncBufRead, AsyncBufReadExt, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 use crate::util::constants::RECV_BUFFER_LIMIT;
@@ -7,19 +8,37 @@ pub async fn read_frame<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<Messa
     let mut limited_reader = reader.take(RECV_BUFFER_LIMIT as u64);
     let mut line = String::new();
     let n = limited_reader.read_line(&mut line).await.map_err(ProtocolError::Io)?;
+    tracing::debug!(%line, "line read in readframe");
 
     if n >= RECV_BUFFER_LIMIT {
         return Err(ProtocolError::OversizedFrame); // frame too big
     }
-
     if line.trim().is_empty() {
         return Err(ProtocolError::ConnectionClosed); //EOF
     }
-
     // TODO: check when the line set is only containing /n (heartbeat)
 
-    let message = serde_json::from_str(&line).map_err(|_| ProtocolError::InvalidFormat);
-    return message;
+    let raw: Value = serde_json::from_str(&line).map_err(|_| ProtocolError::InvalidFormat)?;
+
+    // must be an object
+    let obj = raw.as_object().ok_or(ProtocolError::InvalidFormat)?;
+    let typ = obj.get("type").and_then(Value::as_str).ok_or(ProtocolError::InvalidFormat)?;
+
+    let allowed_keys: &[&str] = match typ {
+        "Hello" => &["type", "port", "user_agent"],
+        "GetPeers" => &["type"],
+        "Peers" => &["type", "peers"],
+        "Error" => &["type", "name", "msg"],
+        // if unknown type, we’ll turn it into Message::Unknown but still reject any extra keys
+        _other => &["type"],
+    };
+    for key in obj.keys() {
+        if !allowed_keys.contains(&key.as_str()) {
+            return Err(ProtocolError::InvalidFormat);
+        }
+    }
+    let msg: Message = serde_json::from_value(raw).map_err(|_| ProtocolError::InvalidFormat)?;
+    Ok(msg)
 }
 
 pub async fn write_frame<W: AsyncWrite + Unpin>(

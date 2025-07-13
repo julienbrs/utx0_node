@@ -4,12 +4,24 @@ use crate::protocol::peerlist::Peer;
 
 // TODO: forbid unwanted extra fields when deserialize w/ deny_unknown_fields. But doesnt work for enum
 #[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
-#[serde(tag = "type")]
+// 1) deny unknown fields in *any* variant
+// 2) catch all unknown "type" tags into `Unknown`
+#[serde(tag = "type", deny_unknown_fields)]
 pub enum Message {
-    Hello { port: u16, user_agent: String },
-    Peers { peers: Vec<Peer> },
+    Hello {
+        port: u16,
+        user_agent: String,
+    },
+    Peers {
+        peers: Vec<Peer>,
+    },
     GetPeers,
-    Error { name: String, msg: String },
+    Error {
+        name: String,
+        msg: String,
+    },
+    #[serde(other)]
+    Unknown,
 }
 
 impl Message {
