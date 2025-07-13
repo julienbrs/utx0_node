@@ -9,6 +9,7 @@ use crate::{
     },
     protocol::{message::Message, peerlist::Peer},
     state::{connection::new_outbound_map, peers},
+    util::constants::RECV_BUFFER_LIMIT,
 };
 use core::panic;
 use dashmap::DashMap;
@@ -82,7 +83,7 @@ async fn util_complete_handshake(
 async fn test_getpeers_empty() {
     let (_peer_file, port, _peers_map, server) = util_spawn_test_server().await;
     let (mut reader, mut writer) = util_connect_to(port).await;
-    let config = Arc::new(Config::new_test(port, "node2", _peer_file.path()));
+    let config = Arc::new(Config::new_test(port, "node1", _peer_file.path()));
     util_complete_handshake(config, &mut reader, &mut writer).await.unwrap();
 
     assert_eq!(_peers_map.len(), 0);
@@ -107,7 +108,7 @@ async fn test_getpeers_empty() {
 #[tokio::test]
 async fn test_peers_message_appends() {
     let (tmp_peer_file, port, _, server) = util_spawn_test_server().await;
-    let config = Arc::new(Config::new_test(port, "node2", tmp_peer_file.path()));
+    let config = Arc::new(Config::new_test(port, "node1", tmp_peer_file.path()));
 
     // we prepopulate peer A in the peers file
     let peer_a = Peer::try_from("127.0.0.1:1111").unwrap();
@@ -141,7 +142,7 @@ async fn malformed_json_extra_field_rejected() {
     init_tracing();
 
     let (_peer_file, port, _peers_map, server) = util_spawn_test_server().await;
-    let config = Arc::new(Config::new_test(port, "node2", _peer_file.path()));
+    let config = Arc::new(Config::new_test(port, "node1", _peer_file.path()));
 
     let (mut reader, mut writer) = util_connect_to(port).await;
     util_complete_handshake(config, &mut reader, &mut writer).await.unwrap();
@@ -170,7 +171,7 @@ async fn unknown_message_type_ignored() {
     // init_tracing();
     let (_peer_file, port, _peers_map, server) = util_spawn_test_server().await;
     let (mut reader, mut writer) = util_connect_to(port).await;
-    let config = Arc::new(Config::new_test(port, "node2", _peer_file.path()));
+    let config = Arc::new(Config::new_test(port, "node1", _peer_file.path()));
 
     util_complete_handshake(config, &mut reader, &mut writer).await.unwrap();
 
@@ -185,6 +186,94 @@ async fn unknown_message_type_ignored() {
     // we should still get back a Peers response
     let resp = read_frame(&mut reader).await.expect("expected Peers reply");
     assert!(matches!(resp, Message::Peers { .. }));
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn malformed_json_missing_field_rejected() {
+    init_tracing();
+    let (_peer_file, port, _peers_map, server) = util_spawn_test_server().await;
+    let (mut reader, mut writer) = util_connect_to(port).await;
+    let config = Arc::new(Config::new_test(port, "node1", _peer_file.path()));
+
+    util_complete_handshake(config, &mut reader, &mut writer).await.unwrap();
+
+    // message without field
+    writer.write_all(b"{\"type\":\"Foobar\"}\n").await.unwrap();
+    writer.flush().await.unwrap();
+
+    // we should still get back a Peers response
+    writer.write_all(b"{\"type\":\"GetPeers\"}\n").await.unwrap();
+    writer.flush().await.unwrap();
+
+    // we should still get back a Peers response
+    let resp = read_frame(&mut reader).await.expect("Expected Peers reply");
+
+    assert!(matches!(resp, Message::Peers { .. }));
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn malformed_json_truncated_rejected() {
+    init_tracing();
+    let (_peer_file, port, _peers_map, server) = util_spawn_test_server().await;
+    let (mut reader, mut writer) = util_connect_to(port).await;
+    let config = Arc::new(Config::new_test(port, "node1", _peer_file.path()));
+
+    util_complete_handshake(config, &mut reader, &mut writer).await.unwrap();
+
+    // message without field
+    writer.write_all(b"{\"type\":\"GetPeers\"\n").await.unwrap();
+    writer.flush().await.unwrap();
+
+    let resp = read_frame(&mut reader).await.expect("Expected Error reply");
+
+    tracing::info!(?resp, "resp");
+    assert!(matches!(resp, Message::Error { .. }));
+
+    if let Message::Error { name, .. } = resp {
+        assert_eq!(name, "INVALID_FORMAT");
+    } else {
+        panic!("expected INVALID_FORMAT error, got {:?}", resp);
+    }
+
+    // socket must now be closed
+    let eof = reader.read_line(&mut String::new()).await.unwrap();
+    assert_eq!(eof, 0);
+
+    server.abort();
+}
+
+#[tokio::test]
+async fn oversized_json_rejected() {
+    init_tracing();
+    let (_peer_file, port, _peers_map, server) = util_spawn_test_server().await;
+    let (mut reader, mut writer) = util_connect_to(port).await;
+    let config = Arc::new(Config::new_test(port, "node1", _peer_file.path()));
+
+    util_complete_handshake(config, &mut reader, &mut writer).await.unwrap();
+
+    // oversized JSON
+    let repeated = "x".repeat(RECV_BUFFER_LIMIT);
+    writer.write_all(repeated.as_bytes()).await.unwrap();
+    writer.flush().await.unwrap();
+
+    let resp = read_frame(&mut reader).await.expect("Expected Error reply");
+
+    tracing::info!(?resp, "resp");
+    assert!(matches!(resp, Message::Error { .. }));
+
+    if let Message::Error { name, .. } = resp {
+        assert_eq!(name, "OVERSIZED_FRAME");
+    } else {
+        panic!("expected OVERSIZED_FRAME error, got {:?}", resp);
+    }
+
+    // socket must now be closed
+    let eof = reader.read_line(&mut String::new()).await.unwrap();
+    assert_eq!(eof, 0);
 
     server.abort();
 }

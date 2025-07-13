@@ -29,8 +29,8 @@ where
     loop {
         let msg = match read_frame(&mut reader).await {
             Ok(m) => m,
-            Err(ProtocolError::InvalidFormat | ProtocolError::OversizedFrame) => {
-                let err_msg: Message = ProtocolError::InvalidFormat.into();
+            Err(e @  (ProtocolError::InvalidFormat | ProtocolError::OversizedFrame)) => {
+                let err_msg: Message = e.into();
                 write_frame(&mut writer, &err_msg).await?;
                 return Ok(());
             }
