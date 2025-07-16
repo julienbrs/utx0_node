@@ -22,11 +22,6 @@ pub async fn outbound_loop(
 ) {
     loop {
         outbound_connections.retain(|_, handle| !handle.is_finished());
-        tracing::debug!(
-            active = outbound_connections.len(),
-            "I am {}, retained only active connections",
-            &config.user_agent
-        );
 
         let active = outbound_connections.len();
         if active < config.max_outbound_connection {
@@ -80,7 +75,6 @@ pub async fn outbound_loop(
             }
         }
 
-        tracing::debug!("I am {}, sleeping for {}s", &config.user_agent, config.service_loop_delay);
         sleep(Duration::from_secs(config.service_loop_delay)).await;
     }
 }

@@ -29,7 +29,7 @@ where
     loop {
         let msg = match read_frame(&mut reader).await {
             Ok(m) => m,
-            Err(e @  (ProtocolError::InvalidFormat | ProtocolError::OversizedFrame)) => {
+            Err(e @ (ProtocolError::InvalidFormat | ProtocolError::OversizedFrame)) => {
                 let err_msg: Message = e.into();
                 write_frame(&mut writer, &err_msg).await?;
                 return Ok(());
@@ -89,7 +89,7 @@ fn import_peers(
 ) -> Result<(), PeersError> {
     let candidates: Vec<Peer> =
         incoming.iter().filter(|p| !&config.banned_hosts.contains(p)).cloned().collect();
-    tracing::debug!(?candidates, "I am {}, Adding their peers to mine", &config.user_agent);
+
     for peer in candidates {
         append_peer(&config.peers_file, &peers_map, &peer)?;
     }

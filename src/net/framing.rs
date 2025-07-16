@@ -8,7 +8,6 @@ pub async fn read_frame<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<Messa
     let mut limited_reader = reader.take(RECV_BUFFER_LIMIT as u64);
     let mut line = String::new();
     let n = limited_reader.read_line(&mut line).await.map_err(ProtocolError::Io)?;
-    tracing::debug!(%line, "line read in readframe");
 
     if n >= RECV_BUFFER_LIMIT {
         return Err(ProtocolError::OversizedFrame); // frame too big

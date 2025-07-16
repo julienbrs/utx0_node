@@ -20,7 +20,7 @@ use tracing::info;
 use util::logging::init_logging;
 
 use crate::protocol::peerlist;
-use crate::state::connection::new_outbound_map;
+use crate::state::connection::{InboundCounter, new_outbound_map};
 use crate::state::peers;
 
 #[tokio::main]
@@ -36,7 +36,8 @@ async fn main() {
     peers::append_peer(&peers_file, &peer_map, &peer).unwrap();
     info!(count = peer_map.len(), "After, peers registered");
 
-    // handling outbound connections
+    // handling outbound and inbound connections
+    let inbound_counter = InboundCounter::new();
     let outbound = new_outbound_map();
     {
         let cfg2 = config.clone();
@@ -47,5 +48,15 @@ async fn main() {
         });
     }
 
-    net::listener::start_listening(config, peer_map).await.unwrap();
+    {
+        let cfg = config.clone();
+        let ic = inbound_counter.clone();
+        let om = outbound.clone();
+        let pm = peer_map.clone();
+        tokio::spawn(async move {
+            net::housekeeping::housekeeping_loop(cfg, ic, om, pm).await;
+        });
+    }
+
+    net::listener::start_listening(config, peer_map, inbound_counter).await.unwrap();
 }

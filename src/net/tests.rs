@@ -5,10 +5,14 @@ use crate::{
     net::{
         client::outbound_loop,
         framing::{read_frame, write_frame},
+        housekeeping::housekeeping_loop,
         listener::start_listening,
     },
     protocol::{message::Message, peerlist::Peer},
-    state::{connection::new_outbound_map, peers},
+    state::{
+        connection::{InboundCounter, new_outbound_map},
+        peers,
+    },
     util::constants::RECV_BUFFER_LIMIT,
 };
 use core::panic;
@@ -22,6 +26,7 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, BufWriter, ReadHalf, WriteHalf, split},
     net::{TcpListener, TcpStream},
     sync::Barrier,
+    task::JoinHandle,
     time::sleep,
 };
 
@@ -43,11 +48,13 @@ async fn util_spawn_test_server()
     let peers_map = peers::load_from_disk(&peers_path);
     let cfg = Arc::new(Config::new_test(port, "test/0.1", tmpfile.path()));
 
+    let ic = InboundCounter::new();
+
     let server_task = {
         let peers_map = peers_map.clone();
         let cfg = cfg.clone();
         tokio::spawn(async move {
-            start_listening(cfg, peers_map).await.unwrap();
+            start_listening(cfg, peers_map, ic).await.unwrap();
         })
     };
 
@@ -301,9 +308,11 @@ async fn two_nodes_discover_each_other() {
     let pm2: Arc<DashMap<Peer, ()>> = peers::load_from_disk(&cfg2.peers_file);
     pm2.insert(Peer { host: "127.0.0.1".into(), port: port1 }, ());
 
-    // outbound connections empty at start
+    // outbound and inbound connections empty at start
     let oc1 = new_outbound_map();
     let oc2 = new_outbound_map();
+    let ic1 = InboundCounter::new();
+    let ic2 = InboundCounter::new();
 
     let barrier = Arc::new(Barrier::new(4));
 
@@ -314,7 +323,7 @@ async fn two_nodes_discover_each_other() {
         let pm = pm1.clone();
         tokio::spawn(async move {
             b1.wait().await;
-            start_listening(cfg, pm).await.unwrap();
+            start_listening(cfg, pm, ic1).await.unwrap();
         })
     };
     let b2 = barrier.clone();
@@ -323,7 +332,7 @@ async fn two_nodes_discover_each_other() {
         let pm = pm2.clone();
         tokio::spawn(async move {
             b2.wait().await;
-            start_listening(cfg, pm).await.unwrap();
+            start_listening(cfg, pm, ic2).await.unwrap();
         })
     };
 
@@ -395,6 +404,8 @@ async fn discovery_via_intermediary() {
 
     let oc2 = new_outbound_map();
     let oc3 = new_outbound_map();
+    let ic2 = InboundCounter::new();
+    let ic3 = InboundCounter::new();
 
     let barrier = Arc::new(Barrier::new(5));
 
@@ -404,25 +415,27 @@ async fn discovery_via_intermediary() {
         let pm = pm1.clone();
         tokio::spawn(async move {
             b1.wait().await;
-            start_listening(cfg, pm).await.unwrap();
+            start_listening(cfg, pm, ic2).await.unwrap();
         })
     };
     let b2 = barrier.clone();
     let l2_task = {
         let cfg = cfg2.clone();
         let pm = pm2.clone();
+        let ic3 = ic3.clone();
         tokio::spawn(async move {
             b2.wait().await;
-            start_listening(cfg, pm).await.unwrap();
+            start_listening(cfg, pm, ic3).await.unwrap();
         })
     };
     let b3 = barrier.clone();
     let l3_task = {
         let cfg = cfg3.clone();
         let pm = pm3.clone();
+        let ic3 = ic3.clone();
         tokio::spawn(async move {
             b3.wait().await;
-            start_listening(cfg, pm).await.unwrap();
+            start_listening(cfg, pm, ic3).await.unwrap();
         })
     };
 
@@ -456,4 +469,94 @@ async fn discovery_via_intermediary() {
     l3_task.abort();
     o2_task.abort();
     o3_task.abort();
+}
+
+#[tokio::test]
+async fn test_housekeeping_prunes_finished_outbound() {
+    init_tracing();
+    let cfg = Arc::new(Config::new_test(0, "node1", "peers.csv"));
+    let peers_map = Arc::new(DashMap::new());
+    let outbound = new_outbound_map();
+    let inbound_ctr = InboundCounter::new();
+
+    tokio::spawn({
+        let cfg = cfg.clone();
+        let om = outbound.clone();
+        let pm = peers_map.clone();
+        let ic = inbound_ctr.clone();
+        async move {
+            // boucle infinie qui retient et prune
+            housekeeping_loop(cfg, ic, om, pm).await;
+        }
+    });
+
+    // 2 tasks, one shutting down instantly, the other one in 60 sec
+    let peer1 = Peer { host: "127.0.0.1".into(), port: 1001 };
+    let peer2 = Peer { host: "127.0.0.1".into(), port: 1002 };
+
+    let h1: JoinHandle<()> = tokio::spawn(async {
+        // task does nothing and cuts
+    });
+    let h2: JoinHandle<()> = tokio::spawn(async {
+        sleep(Duration::from_secs(60)).await;
+    });
+
+    // runtime executing h1
+    tokio::task::yield_now().await;
+
+    // insert 2 handles in outbound_map
+    outbound.insert(peer1.clone(), h1);
+    outbound.insert(peer2.clone(), h2);
+
+    // we wait 2 housekeeping cycles
+    sleep(Duration::from_secs(cfg.service_loop_delay * 2)).await;
+
+    // h2 should still run
+    assert_eq!(outbound.len(), 1);
+    assert!(outbound.contains_key(&peer2));
+}
+
+#[tokio::test]
+async fn inbound_counter_counts_active_connections() {
+    let port = TcpListener::bind(("127.0.0.1", 0)).await.unwrap().local_addr().unwrap().port();
+
+    let tmpfile = NamedTempFile::new().unwrap();
+    let peers_map = peers::load_from_disk(tmpfile.path());
+    let cfg = Arc::new(Config::new_test(port, "node1", tmpfile.path()));
+    let inbound = InboundCounter::new();
+
+    let server = {
+        let cfg = cfg.clone();
+        let pm = peers_map.clone();
+        let ic = inbound.clone();
+        tokio::spawn(async move {
+            start_listening(cfg, pm, ic).await.unwrap();
+        })
+    };
+
+    sleep(Duration::from_millis(50)).await;
+    assert_eq!(inbound.load(), 0, "no inbound connexion at start");
+
+    // open client connexion + handshake
+    let sock = TcpStream::connect(("127.0.0.1", port)).await.unwrap();
+    let (r, mut w) = split(sock);
+    let mut rdr = BufReader::new(r);
+
+    let hello = Message::mk_hello(cfg.port, cfg.user_agent.clone());
+    write_frame(&mut w, &hello).await.unwrap();
+    let _ = read_frame(&mut rdr).await.unwrap(); // server Hello
+    let _ = read_frame(&mut rdr).await.unwrap(); // server GetPeers
+
+    assert_eq!(inbound.load(), 1, "inbound connexion should be 1");
+
+    // 5) Fermer la connexion client
+    drop(rdr);
+    drop(w);
+    sleep(Duration::from_millis(100)).await;
+
+    // 6) Le compteur doit retomber à 0
+    assert_eq!(inbound.load(), 0, "inbound connexion should be 0 at the end");
+
+    // 7) Abandonner proprement le listener
+    server.abort();
 }
