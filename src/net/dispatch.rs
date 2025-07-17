@@ -10,6 +10,7 @@ use crate::{
     net::framing::{read_frame, write_frame},
     protocol::{message::Message, peerlist::Peer},
     state::peers::{PeersError, append_peer},
+    storage::api::ObjectStore,
 };
 
 const MAX_PEERS_PER_REPLY: usize = 10;
@@ -20,6 +21,7 @@ pub async fn run_message_loop<R, W>(
     mut reader: R,
     mut writer: W,
     config: Arc<Config>,
+    _store: Arc<dyn ObjectStore + Send + Sync>,
     peers_map: Arc<DashMap<Peer, ()>>,
 ) -> Result<(), ProtocolError>
 where

@@ -5,18 +5,13 @@ use tokio::{task::JoinHandle, time::sleep};
 
 use crate::{
     config::Config, net::dispatch::run_message_loop, protocol::peerlist::Peer,
-    state::connection::ConnectionOutboundMap,
+    state::connection::ConnectionOutboundMap, storage::api::ObjectStore,
 };
 use rand::seq::IteratorRandom;
 
-// pub async fn outbound_loop(...) {
-//     // Phase-0: dial + Phase-1 handshake outbound
-//     // then:
-//     dispatch::run_message_loop(reader, writer, config, peers_map).await
-//   }
-
 pub async fn outbound_loop(
     config: Arc<Config>,
+    store: Arc<dyn ObjectStore + Send + Sync>,
     outbound_connections: ConnectionOutboundMap,
     peers_map: Arc<DashMap<Peer, ()>>,
 ) {
@@ -42,6 +37,7 @@ pub async fn outbound_loop(
                 let pm_for_task = peers_map.clone();
                 let oc_for_task = outbound_connections.clone();
                 let peer_for_task = peer.clone();
+                let store = store.clone();
 
                 let handle: JoinHandle<()> = tokio::spawn(async move {
                     tracing::debug!(%peer_for_task, %cfg_for_task.user_agent, "Starting handshake");
@@ -60,9 +56,14 @@ pub async fn outbound_loop(
                     };
 
                     tracing::debug!(%peer_for_task, "Handshake OK, entering message loop");
-                    if let Err(e) =
-                        run_message_loop(reader, writer, cfg_for_task.clone(), pm_for_task.clone())
-                            .await
+                    if let Err(e) = run_message_loop(
+                        reader,
+                        writer,
+                        cfg_for_task.clone(),
+                        store,
+                        pm_for_task.clone(),
+                    )
+                    .await
                     {
                         tracing::warn!(peer = %peer_for_task, error = %e, "Loop failed");
                     }

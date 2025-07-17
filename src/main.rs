@@ -10,6 +10,7 @@ mod error;
 mod net;
 mod protocol;
 mod state;
+mod storage;
 mod util;
 
 use std::path::PathBuf;
@@ -22,12 +23,17 @@ use util::logging::init_logging;
 use crate::protocol::peerlist;
 use crate::state::connection::{InboundCounter, new_outbound_map};
 use crate::state::peers;
+use crate::storage::RedbStore;
 
 #[tokio::main]
 async fn main() {
     init_logging();
     let config = Arc::new(Config::new(18018, "utx0-v0.1", "peers.csv"));
     info!(config.port, "Kerma node starting up ");
+
+    let store = RedbStore::new("objects.db")
+        .unwrap_or_else(|e| panic!("Error during creation of redb db: {e}"));
+    let store = Arc::new(store);
 
     let peers_file = PathBuf::from("peers.csv");
     let peer_map = peers::load_from_disk(&peers_file);
@@ -41,13 +47,15 @@ async fn main() {
     let outbound = new_outbound_map();
     {
         let cfg2 = config.clone();
+        let store = store.clone();
         let pm2 = peer_map.clone();
         let out2 = outbound.clone();
         tokio::spawn(async move {
-            net::client::outbound_loop(cfg2, out2, pm2).await;
+            net::client::outbound_loop(cfg2, store, out2, pm2).await;
         });
     }
 
+    // housekeeping
     {
         let cfg = config.clone();
         let ic = inbound_counter.clone();
@@ -58,5 +66,5 @@ async fn main() {
         });
     }
 
-    net::listener::start_listening(config, peer_map, inbound_counter).await.unwrap();
+    net::listener::start_listening(config, store.clone(), peer_map, inbound_counter).await.unwrap();
 }

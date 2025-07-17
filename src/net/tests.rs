@@ -13,6 +13,7 @@ use crate::{
         connection::{InboundCounter, new_outbound_map},
         peers,
     },
+    storage::RedbStore,
     util::constants::RECV_BUFFER_LIMIT,
 };
 use core::panic;
@@ -39,7 +40,7 @@ fn init_tracing() {
 }
 
 async fn util_spawn_test_server()
--> (NamedTempFile, u16, Arc<DashMap<Peer, ()>>, tokio::task::JoinHandle<()>) {
+-> (NamedTempFile, u16, Arc<RedbStore>, Arc<DashMap<Peer, ()>>, tokio::task::JoinHandle<()>) {
     let tmpfile = NamedTempFile::new().unwrap(); // creating file
     let peers_path: PathBuf = tmpfile.path().to_path_buf();
 
@@ -47,20 +48,24 @@ async fn util_spawn_test_server()
     let port = listener.local_addr().unwrap().port();
     let peers_map = peers::load_from_disk(&peers_path);
     let cfg = Arc::new(Config::new_test(port, "test/0.1", tmpfile.path()));
+    let db_file = NamedTempFile::new().unwrap();
+    let store = RedbStore::new(db_file.path()).expect("redb store creation");
+    let store = Arc::new(store);
 
     let ic = InboundCounter::new();
 
     let server_task = {
         let peers_map = peers_map.clone();
         let cfg = cfg.clone();
+        let store = store.clone();
         tokio::spawn(async move {
-            start_listening(cfg, peers_map, ic).await.unwrap();
+            start_listening(cfg, store, peers_map, ic).await.unwrap();
         })
     };
 
     // give the listener a moment to bind
     sleep(Duration::from_millis(50)).await;
-    (tmpfile, port, peers_map, server_task)
+    (tmpfile, port, store, peers_map, server_task)
 }
 
 pub async fn util_connect_to(
@@ -88,7 +93,7 @@ async fn util_complete_handshake(
 
 #[tokio::test]
 async fn test_getpeers_empty() {
-    let (_peer_file, port, _peers_map, server) = util_spawn_test_server().await;
+    let (_peer_file, port, _store, _peers_map, server) = util_spawn_test_server().await;
     let (mut reader, mut writer) = util_connect_to(port).await;
     let config = Arc::new(Config::new_test(port, "node1", _peer_file.path()));
     util_complete_handshake(config, &mut reader, &mut writer).await.unwrap();
@@ -114,7 +119,7 @@ async fn test_getpeers_empty() {
 
 #[tokio::test]
 async fn test_peers_message_appends() {
-    let (tmp_peer_file, port, _, server) = util_spawn_test_server().await;
+    let (tmp_peer_file, port, _store, _, server) = util_spawn_test_server().await;
     let config = Arc::new(Config::new_test(port, "node1", tmp_peer_file.path()));
 
     // we prepopulate peer A in the peers file
@@ -148,7 +153,7 @@ async fn test_peers_message_appends() {
 async fn malformed_json_extra_field_rejected() {
     init_tracing();
 
-    let (_peer_file, port, _peers_map, server) = util_spawn_test_server().await;
+    let (_peer_file, port, _store, _peers_map, server) = util_spawn_test_server().await;
     let config = Arc::new(Config::new_test(port, "node1", _peer_file.path()));
 
     let (mut reader, mut writer) = util_connect_to(port).await;
@@ -176,7 +181,7 @@ async fn malformed_json_extra_field_rejected() {
 #[tokio::test]
 async fn unknown_message_type_ignored() {
     // init_tracing();
-    let (_peer_file, port, _peers_map, server) = util_spawn_test_server().await;
+    let (_peer_file, port, _store, _peers_map, server) = util_spawn_test_server().await;
     let (mut reader, mut writer) = util_connect_to(port).await;
     let config = Arc::new(Config::new_test(port, "node1", _peer_file.path()));
 
@@ -200,7 +205,7 @@ async fn unknown_message_type_ignored() {
 #[tokio::test]
 async fn malformed_json_missing_field_rejected() {
     init_tracing();
-    let (_peer_file, port, _peers_map, server) = util_spawn_test_server().await;
+    let (_peer_file, port, _store, _peers_map, server) = util_spawn_test_server().await;
     let (mut reader, mut writer) = util_connect_to(port).await;
     let config = Arc::new(Config::new_test(port, "node1", _peer_file.path()));
 
@@ -225,7 +230,7 @@ async fn malformed_json_missing_field_rejected() {
 #[tokio::test]
 async fn malformed_json_truncated_rejected() {
     init_tracing();
-    let (_peer_file, port, _peers_map, server) = util_spawn_test_server().await;
+    let (_peer_file, port, _store, _peers_map, server) = util_spawn_test_server().await;
     let (mut reader, mut writer) = util_connect_to(port).await;
     let config = Arc::new(Config::new_test(port, "node1", _peer_file.path()));
 
@@ -256,7 +261,7 @@ async fn malformed_json_truncated_rejected() {
 #[tokio::test]
 async fn oversized_json_rejected() {
     init_tracing();
-    let (_peer_file, port, _peers_map, server) = util_spawn_test_server().await;
+    let (_peer_file, port, _store, _peers_map, server) = util_spawn_test_server().await;
     let (mut reader, mut writer) = util_connect_to(port).await;
     let config = Arc::new(Config::new_test(port, "node1", _peer_file.path()));
 
@@ -297,6 +302,9 @@ async fn two_nodes_discover_each_other() {
 
     let file1 = NamedTempFile::new().unwrap();
     let file2 = NamedTempFile::new().unwrap();
+    let store_foo = RedbStore::new("objects1.db")
+        .unwrap_or_else(|e| panic!("Error during creation of redb db: {e}"));
+    let store_foo = Arc::new(store_foo);
 
     let cfg1 = Arc::new(Config::new_test(port1, "node1", file1.path()));
     let cfg2 = Arc::new(Config::new_test(port2, "node2", file2.path()));
@@ -321,18 +329,20 @@ async fn two_nodes_discover_each_other() {
     let l1_task = {
         let cfg = cfg1.clone();
         let pm = pm1.clone();
+        let store_foo = store_foo.clone();
         tokio::spawn(async move {
             b1.wait().await;
-            start_listening(cfg, pm, ic1).await.unwrap();
+            start_listening(cfg, store_foo, pm, ic1).await.unwrap();
         })
     };
     let b2 = barrier.clone();
     let l2_task = {
         let cfg = cfg2.clone();
         let pm = pm2.clone();
+        let store_foo = store_foo.clone();
         tokio::spawn(async move {
             b2.wait().await;
-            start_listening(cfg, pm, ic2).await.unwrap();
+            start_listening(cfg, store_foo, pm, ic2).await.unwrap();
         })
     };
 
@@ -342,9 +352,10 @@ async fn two_nodes_discover_each_other() {
         let cfg = cfg1.clone();
         let pm = pm1.clone();
         let out = oc1.clone();
+        let store_foo = store_foo.clone();
         tokio::spawn(async move {
             b3.wait().await;
-            outbound_loop(cfg, out, pm).await;
+            outbound_loop(cfg, store_foo, out, pm).await;
         })
     };
     let b4 = barrier.clone();
@@ -352,9 +363,10 @@ async fn two_nodes_discover_each_other() {
         let cfg = cfg2.clone();
         let pm = pm2.clone();
         let out = oc2.clone();
+        let store_foo = store_foo.clone();
         tokio::spawn(async move {
             b4.wait().await;
-            outbound_loop(cfg, out, pm).await;
+            outbound_loop(cfg, store_foo, out, pm).await;
         })
     };
 
@@ -391,6 +403,18 @@ async fn discovery_via_intermediary() {
     let file2 = NamedTempFile::new().unwrap();
     let file3 = NamedTempFile::new().unwrap();
 
+    let db1 = NamedTempFile::new().unwrap();
+    let store1 = RedbStore::new(db1.path()).unwrap();
+    let store1 = Arc::new(store1);
+
+    let db2 = NamedTempFile::new().unwrap();
+    let store2 = RedbStore::new(db2.path()).unwrap();
+    let store2 = Arc::new(store2);
+
+    let db3 = NamedTempFile::new().unwrap();
+    let store3 = RedbStore::new(db3.path()).unwrap();
+    let store3 = Arc::new(store3);
+
     let cfg1 = Arc::new(Config::new_test(port1, "node1", file1.path()));
     let cfg2 = Arc::new(Config::new_test(port2, "node2", file2.path()));
     let cfg3 = Arc::new(Config::new_test(port3, "node3", file3.path()));
@@ -413,9 +437,10 @@ async fn discovery_via_intermediary() {
     let l1_task = {
         let cfg = cfg1.clone();
         let pm = pm1.clone();
+        let store1 = store1.clone();
         tokio::spawn(async move {
             b1.wait().await;
-            start_listening(cfg, pm, ic2).await.unwrap();
+            start_listening(cfg, store1, pm, ic2).await.unwrap();
         })
     };
     let b2 = barrier.clone();
@@ -423,9 +448,10 @@ async fn discovery_via_intermediary() {
         let cfg = cfg2.clone();
         let pm = pm2.clone();
         let ic3 = ic3.clone();
+        let store2 = store2.clone();
         tokio::spawn(async move {
             b2.wait().await;
-            start_listening(cfg, pm, ic3).await.unwrap();
+            start_listening(cfg, store2, pm, ic3).await.unwrap();
         })
     };
     let b3 = barrier.clone();
@@ -433,9 +459,10 @@ async fn discovery_via_intermediary() {
         let cfg = cfg3.clone();
         let pm = pm3.clone();
         let ic3 = ic3.clone();
+        let store3 = store3.clone();
         tokio::spawn(async move {
             b3.wait().await;
-            start_listening(cfg, pm, ic3).await.unwrap();
+            start_listening(cfg, store3, pm, ic3).await.unwrap();
         })
     };
 
@@ -444,9 +471,10 @@ async fn discovery_via_intermediary() {
         let cfg = cfg2.clone();
         let pm = pm2.clone();
         let oc = oc2.clone();
+        let store2 = store2.clone();
         tokio::spawn(async move {
             b4.wait().await;
-            outbound_loop(cfg, oc, pm).await;
+            outbound_loop(cfg, store2, oc, pm).await;
         })
     };
     let b5 = barrier.clone();
@@ -454,9 +482,10 @@ async fn discovery_via_intermediary() {
         let cfg = cfg3.clone();
         let pm = pm3.clone();
         let oc = oc3.clone();
+        let store3 = store3.clone();
         tokio::spawn(async move {
             b5.wait().await;
-            outbound_loop(cfg, oc, pm).await;
+            outbound_loop(cfg, store3, oc, pm).await;
         })
     };
 
@@ -523,6 +552,9 @@ async fn inbound_counter_counts_active_connections() {
     let tmpfile = NamedTempFile::new().unwrap();
     let peers_map = peers::load_from_disk(tmpfile.path());
     let cfg = Arc::new(Config::new_test(port, "node1", tmpfile.path()));
+    let store = RedbStore::new("objects.db")
+        .unwrap_or_else(|e| panic!("Error during creation of redb db: {e}"));
+    let store = Arc::new(store);
     let inbound = InboundCounter::new();
 
     let server = {
@@ -530,7 +562,7 @@ async fn inbound_counter_counts_active_connections() {
         let pm = peers_map.clone();
         let ic = inbound.clone();
         tokio::spawn(async move {
-            start_listening(cfg, pm, ic).await.unwrap();
+            start_listening(cfg, store, pm, ic).await.unwrap();
         })
     };
 

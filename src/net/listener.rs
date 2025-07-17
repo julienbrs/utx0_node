@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     config::Config, error::ProtocolError, protocol::peerlist::Peer,
-    state::connection::InboundCounter,
+    state::connection::InboundCounter, storage::api::ObjectStore,
 };
 use dashmap::DashMap;
 
@@ -12,6 +12,7 @@ use tokio::net::{TcpListener, TcpStream};
 /// does inbound‐handshake + hands off into the common dispatch loop.
 pub async fn start_listening(
     config: Arc<Config>,
+    store: Arc<dyn ObjectStore + Send + Sync>,
     peers_map: Arc<DashMap<Peer, ()>>,
     inbound_counter: InboundCounter,
 ) -> Result<(), ProtocolError> {
@@ -26,10 +27,11 @@ pub async fn start_listening(
         let cfg = config.clone();
         let peers_map = peers_map.clone();
         let ic = inbound_counter.clone();
+        let store = store.clone();
         tokio::spawn(async move {
             let _guard = ic.enter();
             // `_guard` will drop (decrement) when this async task exits
-            if let Err(e) = handle_connection(socket, cfg, peers_map).await {
+            if let Err(e) = handle_connection(socket, cfg, store, peers_map).await {
                 tracing::warn!(error = %e, "Connection handler failed");
             }
         });
@@ -39,10 +41,11 @@ pub async fn start_listening(
 pub async fn handle_connection(
     socket: TcpStream,
     config: Arc<Config>,
+    store: Arc<dyn ObjectStore + Send + Sync>,
     peers_map: Arc<DashMap<Peer, ()>>,
 ) -> Result<(), ProtocolError> {
     // do phases 1+2 of inbound handshake, then hand over to dispatch
     let (reader, writer) = crate::protocol::handshake::inbound(socket, &config).await?;
-    crate::net::dispatch::run_message_loop(reader, writer, config, peers_map).await?;
+    crate::net::dispatch::run_message_loop(reader, writer, config, store, peers_map).await?;
     Ok(())
 }

@@ -47,25 +47,25 @@ mod housekeeping_tests {
         state::connection::{InboundCounter, new_outbound_map},
     };
     use dashmap::DashMap;
-    use std::sync::{Arc, Once};
+    use std::sync::Arc;
     use tokio::{
         task::JoinHandle,
         time::{Duration, sleep},
     };
 
-    static INIT: Once = Once::new();
-    fn init_tracing() {
-        INIT.call_once(|| {
-            tracing_subscriber::fmt()
-                .with_max_level(tracing::Level::DEBUG)
-                .with_test_writer()
-                .init();
-        });
-    }
+    // static INIT: Once = Once::new();
+    // fn init_tracing() {
+    //     INIT.call_once(|| {
+    //         tracing_subscriber::fmt()
+    //             .with_max_level(tracing::Level::DEBUG)
+    //             .with_test_writer()
+    //             .init();
+    //     });
+    // }
 
     #[tokio::test]
     async fn housekeeping_prunes_finished_outbound_and_logs_counts() {
-        init_tracing();
+        // init_tracing();
         let cfg = Arc::new(Config::new_test(0, "hk/0.1", "peers.csv"));
         let peers_map = Arc::new(DashMap::new());
         let outbound = new_outbound_map();
