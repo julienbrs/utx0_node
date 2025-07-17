@@ -1,3 +1,4 @@
+use blake2::{Blake2s256, Digest};
 use serde_json::{Error, Value};
 
 pub fn to_canonical_json(v: &Value) -> Result<Vec<u8>, Error> {
@@ -38,8 +39,20 @@ pub fn to_canonical_json(v: &Value) -> Result<Vec<u8>, Error> {
     }
 }
 
+pub fn compute_object_id(v: &Value) -> Result<String, Error> {
+    let canonical_json = to_canonical_json(&v)?;
+    let mut hasher = Blake2s256::new();
+    hasher.update(canonical_json);
+    let hash = hasher.finalize();
+    Ok(hex::encode(hash))
+}
+
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
+    use crate::util::canonical::compute_object_id;
+
     use super::to_canonical_json;
 
     fn canon(s: &str) -> String {
@@ -89,5 +102,56 @@ mod tests {
         assert!(out.contains(r#""hello\nworld""#));
         assert!(out.contains("ሴ"));
         assert_eq!(&out[0..3], r#"{"s"#);
+    }
+
+    #[test]
+    fn test_canonical_ordering() {
+        let v1 = json!({ "b": 2, "a": 1 });
+        let v2 = json!({ "a": 1, "b": 2 });
+        let c1 = to_canonical_json(&v1).unwrap();
+        let c2 = to_canonical_json(&v2).unwrap();
+        assert_eq!(c1, c2, "canonical json should be the same");
+        assert_eq!(String::from_utf8(c1).unwrap(), r#"{"a":1,"b":2}"#);
+    }
+
+    #[test]
+    fn compute_object_correct_hash_1() {
+        let genesis = json!({
+            "object": {
+                "height": 0,
+                "outputs": [
+                    {
+                        "pubkey": "85acb336a150b16a9c6c8c27a4e9c479d9f99060a7945df0bb1b53365e98969b",
+                        "value": 50000000000000u64
+                    }
+                ],
+                "type": "transaction"
+            },
+            "type": "object"
+        });
+        let id = compute_object_id(&genesis).unwrap();
+        assert_eq!(id, "5fdb2f396f0007512f4d5dfd2391acd7cbc7c3ba905106507a000426f417e06e");
+    }
+
+    #[test]
+    fn compute_object_correct_hash_2() {
+        // dummy json, values mean nothing
+        let spend = json!({
+            "object": {
+                "inputs": [
+                    {
+                        "outpoint": {
+                            "txid": "d46d09138f0251edc32e28f1a744cb0b7286850e4c9c777d7e3c6e459b289347",
+                            "index": 0
+                        },
+                        "sig": "6204bbdbacc86b1f4357cfe45e6374b963f5455f26df0a86338310df33e50c15d7f04"
+                    }
+                ],
+                "type": "transaction"
+            },
+            "type": "object"
+        });
+        let id = compute_object_id(&spend).unwrap();
+        assert_eq!(id, "824d9b6d4f97eef50beb44a9af1830ba836954b40e2c4bbfd2e65b5417ffc58c");
     }
 }
