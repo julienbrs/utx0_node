@@ -14,6 +14,8 @@ pub enum ProtocolError {
     ConnectionClosed,
     #[error("frame too large (max 512 KiB)")]
     OversizedFrame,
+    #[error("storage error: {0}")]
+    Storage(#[from] crate::storage::error::StorageError),
 }
 
 impl From<std::io::Error> for ProtocolError {
@@ -37,6 +39,9 @@ impl From<ProtocolError> for Message {
             ProtocolError::Io(_) => Message::mk_error("IO_ERROR".to_string(), e.to_string()),
             ProtocolError::OversizedFrame => {
                 Message::mk_error("OVERSIZED_FRAME".to_string(), e.to_string())
+            }
+            ProtocolError::Storage(inner) => {
+                Message::mk_error("INTERNAL_STORAGE_ERROR".into(), inner.to_string())
             }
         }
     }

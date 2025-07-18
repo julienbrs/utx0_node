@@ -1,9 +1,8 @@
+use crate::{error::ProtocolError, protocol::peerlist::Peer};
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 
-use crate::protocol::peerlist::Peer;
-
-// TODO: forbid unwanted extra fields when deserialize w/ deny_unknown_fields. But doesnt work for enum
-#[derive(Clone, Serialize, Deserialize, PartialEq, Eq, Debug)]
+#[derive(Clone, Serialize, Deserialize, Debug)]
 // 1) deny unknown fields in *any* variant
 // 2) catch all unknown "type" tags into `Unknown`
 #[serde(tag = "type", deny_unknown_fields)]
@@ -16,6 +15,16 @@ pub enum Message {
         peers: Vec<Peer>,
     },
     GetPeers,
+    GetObject {
+        object_id: String,
+    },
+    GotObject {
+        object_id: String,
+    },
+    Object {
+        object_id: String,
+        object: Box<RawValue>,
+    },
     Error {
         name: String,
         msg: String,
@@ -40,7 +49,42 @@ impl Message {
     pub fn mk_error(name: String, msg: String) -> Self {
         Self::Error { name, msg }
     }
+
+    pub fn build_get_object(object_id: String) -> Self {
+        Self::GetObject { object_id }
+    }
+
+    pub fn build_got_object(object_id: String) -> Self {
+        Self::GotObject { object_id }
+    }
+
+    pub fn build_object(object_id: String, bytes: &[u8]) -> Result<Self, ProtocolError> {
+        let s = std::str::from_utf8(bytes).map_err(|_| ProtocolError::InvalidFormat)?;
+        let raw = RawValue::from_string(s.to_owned()).map_err(|_| ProtocolError::InvalidFormat)?;
+        Ok(Message::Object { object_id, object: raw })
+    }
 }
+
+impl PartialEq for Message {
+    fn eq(&self, other: &Self) -> bool {
+        use Message::*;
+        match (self, other) {
+            (Hello { port: a1, user_agent: u1 }, Hello { port: a2, user_agent: u2 }) => {
+                a1 == a2 && u1 == u2
+            }
+            (Peers { peers: p1 }, Peers { peers: p2 }) => p1 == p2,
+            (GetPeers, GetPeers) | (Unknown, Unknown) => true,
+            (GetObject { object_id: i1 }, GetObject { object_id: i2 })
+            | (GotObject { object_id: i1 }, GotObject { object_id: i2 }) => i1 == i2,
+            (Error { name: n1, msg: m1 }, Error { name: n2, msg: m2 }) => n1 == n2 && m1 == m2,
+            (Object { object_id: id1, object: o1 }, Object { object_id: id2, object: o2 }) => {
+                id1 == id2 && o1.get() == o2.get()
+            }
+            _ => false,
+        }
+    }
+}
+impl Eq for Message {}
 
 #[cfg(test)]
 mod tests {

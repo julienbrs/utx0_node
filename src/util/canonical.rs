@@ -1,5 +1,7 @@
 use blake2::{Blake2s256, Digest};
-use serde_json::{Error, Value};
+use serde_json::{Error, Map, Value};
+
+use crate::error::ProtocolError;
 
 pub fn to_canonical_json(v: &Value) -> Result<Vec<u8>, Error> {
     match v {
@@ -47,11 +49,22 @@ pub fn compute_object_id(v: &Value) -> Result<String, Error> {
     Ok(hex::encode(hash))
 }
 
+pub fn ensure_object_field(raw: &Value) -> Result<&Map<String, Value>, ProtocolError> {
+    let obj = raw.as_object().ok_or(ProtocolError::InvalidFormat)?;
+    let inner = obj.get("object").ok_or(ProtocolError::InvalidFormat)?;
+    let map = inner.as_object().ok_or(ProtocolError::InvalidFormat)?;
+    Ok(map)
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
+    use tempfile::NamedTempFile;
 
-    use crate::util::canonical::compute_object_id;
+    use crate::{
+        storage::{RedbStore, api::ObjectStore},
+        util::canonical::compute_object_id,
+    };
 
     use super::to_canonical_json;
 
@@ -112,6 +125,31 @@ mod tests {
         let c2 = to_canonical_json(&v2).unwrap();
         assert_eq!(c1, c2, "canonical json should be the same");
         assert_eq!(String::from_utf8(c1).unwrap(), r#"{"a":1,"b":2}"#);
+    }
+
+    #[test]
+    fn test_store_and_retrieve_bytes_roundtrip() {
+        let db = NamedTempFile::new().unwrap();
+        let store = RedbStore::new(db.path()).unwrap();
+        let store = std::sync::Arc::new(store);
+
+        let canonical = br#"{"a":1,"b":[2,3]}"#; // canonical bytes
+
+        let id = "dummy_id";
+        let old = store.put(id, canonical).expect("put ok");
+        assert!(old.is_none(), "no old content");
+
+        assert!(store.has(id).unwrap(), "store should know the id");
+
+        let got = store.get(id).expect("get ok").expect("key existing");
+        assert_eq!(got.as_slice(), canonical, "bits should be identical");
+
+        let new_val = br#"{"a":42}"#;
+        let prev = store.put(id, new_val).expect("second put ok").expect("old content retrieved");
+        assert_eq!(prev.as_slice(), canonical, "getting the old value back");
+
+        let got2 = store.get(id).unwrap().unwrap();
+        assert_eq!(got2.as_slice(), new_val, "new value is stored");
     }
 
     #[test]
