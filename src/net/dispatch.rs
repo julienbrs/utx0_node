@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use dashmap::DashMap;
-use rand::{rng, seq::SliceRandom};
+use rand::{seq::SliceRandom, thread_rng};
 use tokio::io::{AsyncBufRead, AsyncWrite};
 
 use crate::{
@@ -119,7 +119,7 @@ where
 }
 
 async fn pick_and_build_peers(config: &Config, peers_map: &DashMap<Peer, ()>) -> Vec<Peer> {
-    let mut rng = rng();
+    let mut rng = thread_rng();
     let mut candidates: Vec<Peer> = peers_map
         .iter()
         .map(|e| e.key().clone())

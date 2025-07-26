@@ -8,6 +8,8 @@ use crate::{storage::api::ObjectStore, util::canonical::to_canonical_json};
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Transaction {
+    #[serde(rename = "type")]
+    kind: String,
     // height bloc value for mined utx0 (coinbase), none for usual tx
     #[serde(default)]
     pub height: Option<u64>,
@@ -149,9 +151,10 @@ pub fn validate_transaction<S: ObjectStore>(
         let pub_key: VerifyingKey = VerifyingKey::from_bytes(&pub_key_array)
             .map_err(|_| TxValidationError::InvalidFormat)?;
 
-        let sig_vec = hex::decode(&input.sig).map_err(|_| TxValidationError::InvalidFormat)?;
+        let sig_vec = hex::decode(&input.sig).map_err(|_| TxValidationError::InvalidSignature)?;
         let sig_array: [u8; 64] =
-            sig_vec.as_slice().try_into().map_err(|_| TxValidationError::InvalidFormat)?;
+            sig_vec.as_slice().try_into().map_err(|_| TxValidationError::InvalidSignature)?;
+
         let sig: Signature = Signature::from_bytes(&sig_array);
 
         pub_key
@@ -159,4 +162,226 @@ pub fn validate_transaction<S: ObjectStore>(
             .map_err(|_| TxValidationError::InvalidSignature)?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::storage::error::StorageError;
+    use crate::util::canonical::compute_object_id;
+
+    use super::*;
+    use ed25519_dalek::{SigningKey, VerifyingKey};
+    use rand::rngs::OsRng;
+    use serde_json::json;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    struct DummyStore {
+        map: Mutex<HashMap<String, Vec<u8>>>,
+    }
+
+    impl DummyStore {
+        fn new() -> Self {
+            DummyStore { map: Mutex::new(HashMap::new()) }
+        }
+        fn insert(&self, txid: &str, bytes: Vec<u8>) {
+            self.map.lock().unwrap().insert(txid.to_string(), bytes);
+        }
+    }
+
+    impl ObjectStore for &DummyStore {
+        fn has(&self, id: &str) -> Result<bool, StorageError> {
+            Ok(self.map.lock().unwrap().contains_key(id))
+        }
+
+        fn get(&self, id: &str) -> Result<Option<Vec<u8>>, StorageError> {
+            Ok(self.map.lock().unwrap().get(id).cloned())
+        }
+
+        fn put(&self, _id: &str, _data: &[u8]) -> Result<Option<Vec<u8>>, StorageError> {
+            unimplemented!()
+        }
+    }
+
+    ///  valid coinbase
+    #[test]
+    fn coinbase_ok() {
+        let store = DummyStore::new();
+        let coinbase = json!({
+            "type": "object",
+            "object": {
+                "type": "transaction",
+                "height": 42,
+                "inputs": [],
+                "outputs": [
+                  { "pubkey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "value": 100 }
+                ]
+            }
+        });
+        assert!(validate_transaction(&coinbase, &store).is_ok());
+    }
+
+    #[test]
+    fn revert_coinbase_non_empty_input() {
+        let store = DummyStore::new();
+        let coinbase = json!({
+            "type": "object",
+            "object": {
+                "type": "transaction",
+                "height": 42,
+                "inputs": [
+                    { "outpoint": { "txid": "dummy", "index": 1 }, "sig": "" }
+                  ],
+                "outputs": [
+                  { "pubkey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "value": 100 }
+                ]
+            }
+        });
+        let e = validate_transaction(&coinbase, &store).unwrap_err();
+        assert!(matches!(e, TxValidationError::InvalidFormat));
+    }
+
+    #[test]
+    fn revert_coinbase_no_height() {
+        let store = DummyStore::new();
+        let coinbase = json!({
+            "type": "object",
+            "object": {
+                "type": "transaction",
+                "height": "",
+                "inputs": [],
+                "outputs": [
+                  { "pubkey": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef", "value": 100 }
+                ]
+            }
+        });
+        let e = validate_transaction(&coinbase, &store).unwrap_err();
+        assert!(matches!(e, TxValidationError::InvalidFormat));
+    }
+
+    /// invalid format if no object
+    #[test]
+    fn missing_object_format_err() {
+        let store = DummyStore::new();
+        let bad = json!({ "type": "object" });
+        let e = validate_transaction(&bad, &store).unwrap_err();
+        assert!(matches!(e, TxValidationError::InvalidFormat));
+    }
+
+    /// UnknownObject if store.get returns none for an input
+    #[test]
+    fn unknown_object_err() {
+        let store = DummyStore::new();
+        let tx = json!({
+            "type": "object",
+            "object": {
+                "type": "transaction",
+                "inputs": [
+                  { "outpoint": { "txid": "deadbeef", "index": 0 }, "sig": "" }
+                ],
+                "outputs": [ { "pubkey": "", "value": 1 } ]
+            }
+        });
+        let e = validate_transaction(&tx, &store).unwrap_err();
+        assert!(matches!(e, TxValidationError::InvalidOutpoint));
+    }
+
+    /// InvalidOutpoint if index out of bounds
+    #[test]
+    fn invalid_outpoint_err() {
+        // parent with a single output
+        let parent = json!({
+            "type": "object",
+            "object": {
+                "type": "transaction",
+                "inputs": [],
+                "outputs": [ { "pubkey": "", "value": 50 } ]
+            }
+        });
+        let bytes = to_canonical_json(&parent).unwrap();
+        let parent_id = compute_object_id(&parent).unwrap();
+
+        let store = DummyStore::new();
+        store.insert(&parent_id, bytes);
+
+        let bad = json!({
+            "type": "object",
+            "object": {
+                "type": "transaction",
+                "inputs": [
+                  { "outpoint": { "txid": parent_id, "index": 1 }, "sig": "" }
+                ],
+                "outputs": [ { "pubkey": "", "value": 1 } ]
+            }
+        });
+        let e = validate_transaction(&bad, &store).unwrap_err();
+        assert!(matches!(e, TxValidationError::InvalidOutpoint));
+    }
+
+    /// Conservation error if sum inputs < sum outputs
+    #[test]
+    fn conservation_err() {
+        // parent à 1
+        let parent = json!({
+            "type": "object",
+            "object": {
+                "type": "transaction",
+                "inputs": [],
+                "outputs": [ { "pubkey": "", "value": 1 } ]
+            }
+        });
+        let bytes = to_canonical_json(&parent).unwrap();
+        let parent_id = compute_object_id(&parent).unwrap();
+
+        let store = DummyStore::new();
+        store.insert(&parent_id, bytes);
+
+        // spend 1 + create output of 2 => conservation error
+        let tx = json!({
+            "type": "object",
+            "object": {
+                "type": "transaction",
+                "inputs": [
+                  { "outpoint": { "txid": parent_id, "index": 0 }, "sig": "" }
+                ],
+                "outputs": [ { "pubkey": "", "value": 2 } ]
+            }
+        });
+        let e = validate_transaction(&tx, &store).unwrap_err();
+        assert!(matches!(e, TxValidationError::InvalidConservation));
+    }
+
+    /// invalid signature
+    #[test]
+    fn invalid_signature_err() {
+        // parent got 5
+        let mut csprng = OsRng;
+        let signing = SigningKey::generate(&mut csprng);
+        let verifying: VerifyingKey = signing.verifying_key();
+
+        // parent transaction
+        let parent = json!({
+            "type":"object","object":{
+                "type":"transaction",
+                "inputs":[],
+                "outputs":[{"pubkey": hex::encode(verifying.as_bytes()), "value":5}]
+            }
+        });
+        let bytes = to_canonical_json(&parent).unwrap();
+        let parent_id = compute_object_id(&parent).unwrap();
+
+        let store = DummyStore::new();
+        store.insert(&parent_id, bytes);
+
+        // not signing the tx
+        let tx_obj = json!({
+            "type":"object","object":{
+                "type":"transaction",
+                "inputs":[{"outpoint":{ "txid": parent_id, "index": 0},"sig": ""}],
+                "outputs":[{"pubkey":"00","value":5}]
+            }
+        });
+        let e = validate_transaction(&tx_obj, &store).unwrap_err();
+        assert!(matches!(e, TxValidationError::InvalidSignature));
+    }
 }

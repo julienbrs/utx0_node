@@ -23,7 +23,7 @@ pub async fn outbound_loop(
             let to_spawn = config.max_outbound_connection - active;
             tracing::debug!(to_spawn, "Preparing to spawn outbound connections");
 
-            let mut rng = rand::rng();
+            let mut rng = rand::thread_rng();
             let candidates: Vec<_> = peers_map
                 .iter()
                 .map(|e| e.key().clone())
